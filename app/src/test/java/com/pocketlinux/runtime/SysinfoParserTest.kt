@@ -63,4 +63,36 @@ class SysinfoParserTest {
         assertEquals(40000, SysinfoParser.parseProcStatmRssKb("30000 10000 4000 50 0 8000 0", 4096L))
         assertEquals(0, SysinfoParser.parseProcStatmRssKb("invalid", 4096L))
     }
+
+    @Test
+    fun handlesExplicitJsonNullValuesWithoutReturningNullStrings() {
+        val jsonWithNulls = """
+            {
+              "sysname": null,
+              "nodename": null,
+              "release": null,
+              "machine": null,
+              "alpine_release": null,
+              "uptime_sec": null,
+              "mem_total_kb": null,
+              "mem_available_kb": null,
+              "mem_free_kb": null,
+              "process_count": null,
+              "x_windows": [null, "0x200001 \"xterm\"", null, ""]
+            }
+        """.trimIndent()
+
+        val snap = SysinfoParser.parse(jsonWithNulls)
+        assertEquals("", snap.sysname)
+        assertEquals("", snap.nodename)
+        assertEquals("", snap.release)
+        assertEquals("", snap.machine)
+        assertEquals("", snap.alpineRelease)
+        assertEquals(0.0, snap.uptimeSec, 0.0001)
+        assertEquals(0L, snap.memTotalKb)
+        assertEquals(0L, snap.memAvailableKb)
+        assertEquals(0L, snap.memFreeKb)
+        assertEquals(0, snap.processCount)
+        assertEquals(listOf("0x200001 \"xterm\""), snap.xWindows)
+    }
 }

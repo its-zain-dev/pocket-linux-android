@@ -17,6 +17,7 @@ interface PosixOps {
     fun chmod(path: String, mode: Int)
     fun symlink(target: String, linkPath: String)
     fun link(existingPath: String, newPath: String)
+    fun readlink(path: String): String
     fun isSymbolicLink(path: File): Boolean
     fun unlinkIfExists(path: File)
 }
@@ -32,6 +33,10 @@ class AndroidPosixOps : PosixOps {
 
     override fun link(existingPath: String, newPath: String) {
         Os.link(existingPath, newPath)
+    }
+
+    override fun readlink(path: String): String {
+        return Os.readlink(path)
     }
 
     override fun isSymbolicLink(path: File): Boolean {
@@ -111,7 +116,11 @@ class RootfsManager(
             try {
                 openAsset(assetName).use { rawIn ->
                     BufferedInputStream(rawIn, IO_BUFFER_SIZE).use { bufIn ->
-                        GzipCompressorInputStream(bufIn, true).use { gzIn ->
+                        GzipCompressorInputStream.builder()
+                            .setInputStream(bufIn)
+                            .setDecompressConcatenated(true)
+                            .get()
+                            .use { gzIn ->
                             TarArchiveInputStream(gzIn).use { tarIn ->
                                 var count = 0
                                 while (true) {
@@ -156,6 +165,7 @@ class RootfsManager(
                                             if (!linkPath.startsWith(stagingPath) || linkPath == stagingPath) {
                                                 throw SecurityException("Hardlink escape rejected: ${entry.linkName}")
                                             }
+                                            ensureParentSafe(stagingPath, linkPath)
                                             val linkTarget = linkPath.toFile()
                                             if (targetFile.isDirectory && !posixOps.isSymbolicLink(targetFile)) {
                                                 deleteRecursivelyNoFollow(targetFile)
@@ -167,7 +177,8 @@ class RootfsManager(
                                                 posixOps.link(linkTarget.absolutePath, targetFile.absolutePath)
                                             } catch (e: Exception) {
                                                 if (posixOps.isSymbolicLink(linkTarget)) {
-                                                    posixOps.symlink(linkTarget.absolutePath, targetFile.absolutePath)
+                                                    val originalLinkTarget = posixOps.readlink(linkTarget.absolutePath)
+                                                    posixOps.symlink(originalLinkTarget, targetFile.absolutePath)
                                                 } else if (linkTarget.isFile) {
                                                     linkTarget.inputStream().use { src ->
                                                         FileOutputStream(targetFile).use { dst ->
@@ -249,14 +260,22 @@ class RootfsManager(
 
     private fun ensureStickyTmpDirs(root: File) {
         val tmpDir = File(root, "tmp")
-        if (!tmpDir.isDirectory && !posixOps.isSymbolicLink(tmpDir)) {
-            tmpDir.mkdirs()
-            posixOps.chmod(tmpDir.absolutePath, MODE_STICKY_TMP)
+        if (!posixOps.isSymbolicLink(tmpDir)) {
+            if (!tmpDir.exists() && !tmpDir.mkdirs()) {
+                throw IOException("Failed to create tmp directory: $tmpDir")
+            }
+            if (tmpDir.isDirectory) {
+                posixOps.chmod(tmpDir.absolutePath, MODE_STICKY_TMP)
+            }
         }
         val x11Dir = File(tmpDir, ".X11-unix")
-        if (!x11Dir.isDirectory && !posixOps.isSymbolicLink(x11Dir)) {
-            x11Dir.mkdirs()
-            posixOps.chmod(x11Dir.absolutePath, MODE_STICKY_TMP)
+        if (tmpDir.isDirectory && !posixOps.isSymbolicLink(tmpDir) && !posixOps.isSymbolicLink(x11Dir)) {
+            if (!x11Dir.exists() && !x11Dir.mkdirs()) {
+                throw IOException("Failed to create X11 unix directory: $x11Dir")
+            }
+            if (x11Dir.isDirectory) {
+                posixOps.chmod(x11Dir.absolutePath, MODE_STICKY_TMP)
+            }
         }
     }
 

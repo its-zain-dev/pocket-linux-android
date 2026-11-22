@@ -53,6 +53,10 @@ class RootfsManagerTest {
             Files.createLink(Path.of(newPath), Path.of(existingPath))
         }
 
+        override fun readlink(path: String): String {
+            return Files.readSymbolicLink(Path.of(path)).toString()
+        }
+
         override fun isSymbolicLink(path: File): Boolean = Files.isSymbolicLink(path.toPath())
 
         override fun unlinkIfExists(path: File) {
@@ -309,5 +313,108 @@ class RootfsManagerTest {
         }
         assertTrue(rejected)
         assertFalse(File(outsideDir, "owned.txt").exists())
+    }
+
+    @Test
+    fun hardlinkToSymlinkFallbackPreservesOriginalSymlinkTarget() {
+        val filesDir = tempFolder.newFolder("files6")
+        val cacheDir = tempFolder.newFolder("cache6")
+        val posix = JvmPosixOps(failHardlink = true)
+        val payload = "#!/bin/sh\necho busybox\n".toByteArray()
+
+        val archive = buildTarGz(
+            listOf(
+                SyntheticEntry.Dir("./bin/", mode = 493),
+                SyntheticEntry.RegularFile("./bin/busybox", payload, mode = 493),
+                SyntheticEntry.Symlink("./bin/sh", "/bin/busybox"),
+                SyntheticEntry.Hardlink("./bin/ash", "./bin/sh", mode = 493)
+            )
+        )
+
+        val manager = RootfsManager(
+            filesDir = filesDir,
+            cacheDir = cacheDir,
+            availableAssets = setOf("rootfs-arm64-v8a.tar.gz"),
+            openAsset = { ByteArrayInputStream(archive) },
+            supportedAbis = listOf("arm64-v8a"),
+            posixOps = posix
+        )
+
+        manager.ensureExtracted()
+        val ash = File(manager.rootfsDir, "bin/ash")
+        assertTrue(Files.isSymbolicLink(ash.toPath()))
+        val target = Files.readSymbolicLink(ash.toPath()).toString()
+        assertEquals("/bin/busybox", target)
+        assertFalse(target.contains("rootfs.staging"))
+    }
+
+    @Test
+    fun rejectsHardlinkWhoseTargetTraversesSymlinkParent() {
+        val filesDir = tempFolder.newFolder("files7")
+        val cacheDir = tempFolder.newFolder("cache7")
+        val outsideDir = tempFolder.newFolder("outside_hardlink")
+        File(outsideDir, "secret.txt").writeText("top-secret")
+        val posix = JvmPosixOps()
+
+        val evilArchive = buildTarGz(
+            listOf(
+                SyntheticEntry.Symlink("./escape_dir", outsideDir.absolutePath),
+                SyntheticEntry.Hardlink("./stolen.txt", "./escape_dir/secret.txt", mode = 420)
+            )
+        )
+
+        val manager = RootfsManager(
+            filesDir = filesDir,
+            cacheDir = cacheDir,
+            availableAssets = setOf("rootfs-x86_64.tar.gz"),
+            openAsset = { ByteArrayInputStream(evilArchive) },
+            supportedAbis = listOf("x86_64"),
+            posixOps = posix
+        )
+
+        var rejected = false
+        try {
+            manager.ensureExtracted()
+        } catch (_: SecurityException) {
+            rejected = true
+        }
+        assertTrue(rejected)
+        assertFalse(File(manager.rootfsDir, "stolen.txt").exists())
+        assertFalse(manager.stagingDir.exists())
+    }
+
+    @Test
+    fun setsStickyBitOnImplicitTmpAndX11UnixDirectories() {
+        val filesDir = tempFolder.newFolder("files8")
+        val cacheDir = tempFolder.newFolder("cache8")
+        val posix = JvmPosixOps()
+
+        // Archive has ./tmp/implicit.txt without explicit ./tmp/ or ./tmp/.X11-unix/ entries
+        val archive = buildTarGz(
+            listOf(
+                SyntheticEntry.Dir("./bin/", mode = 493),
+                SyntheticEntry.RegularFile("./bin/busybox", "ok".toByteArray(), mode = 493),
+                SyntheticEntry.RegularFile("./tmp/implicit.txt", "hello".toByteArray(), mode = 420)
+            )
+        )
+
+        val manager = RootfsManager(
+            filesDir = filesDir,
+            cacheDir = cacheDir,
+            availableAssets = setOf("rootfs-arm64-v8a.tar.gz"),
+            openAsset = { ByteArrayInputStream(archive) },
+            supportedAbis = listOf("arm64-v8a"),
+            posixOps = posix
+        )
+
+        manager.ensureExtracted()
+        assertTrue(File(manager.rootfsDir, "tmp").isDirectory)
+        assertTrue(File(manager.rootfsDir, "tmp/.X11-unix").isDirectory)
+        assertTrue(File(manager.rootfsDir, "tmp/implicit.txt").isFile)
+
+        val stagingTmp = File(manager.rootfsDir.parentFile, "rootfs.staging/tmp").absolutePath
+        val stagingX11 = File(manager.rootfsDir.parentFile, "rootfs.staging/tmp/.X11-unix").absolutePath
+        assertEquals(1023, posix.recordedModes[stagingTmp])
+        assertEquals(1023, posix.recordedModes[stagingX11])
     }
 }

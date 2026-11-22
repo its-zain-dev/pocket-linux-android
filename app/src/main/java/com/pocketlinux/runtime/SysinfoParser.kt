@@ -36,17 +36,19 @@ object SysinfoParser {
             val windows = buildList {
                 if (windowsArray != null) {
                     for (i in 0 until windowsArray.length()) {
-                        val item = windowsArray.optString(i, "")
-                        if (item.isNotBlank()) add(item)
+                        if (!windowsArray.isNull(i)) {
+                            val item = windowsArray.optString(i, "")
+                            if (item.isNotBlank()) add(item)
+                        }
                     }
                 }
             }
             SysinfoSnapshot(
-                sysname = obj.optString("sysname", ""),
-                nodename = obj.optString("nodename", ""),
-                release = obj.optString("release", ""),
-                machine = obj.optString("machine", ""),
-                alpineRelease = obj.optString("alpine_release", ""),
+                sysname = obj.optNonNullString("sysname"),
+                nodename = obj.optNonNullString("nodename"),
+                release = obj.optNonNullString("release"),
+                machine = obj.optNonNullString("machine"),
+                alpineRelease = obj.optNonNullString("alpine_release"),
                 uptimeSec = obj.optDouble("uptime_sec", 0.0),
                 memTotalKb = obj.optLong("mem_total_kb", 0L),
                 memAvailableKb = obj.optLong("mem_available_kb", 0L),
@@ -57,6 +59,10 @@ object SysinfoParser {
         } catch (_: Exception) {
             SysinfoSnapshot()
         }
+    }
+
+    private fun JSONObject.optNonNullString(key: String): String {
+        return if (isNull(key)) "" else optString(key, "")
     }
 
     fun parseProcVmRssKb(statusContent: String): Int {
