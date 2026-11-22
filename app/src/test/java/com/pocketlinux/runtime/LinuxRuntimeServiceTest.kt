@@ -250,7 +250,9 @@ class LinuxRuntimeServiceTest {
             engine.startRuntime()
             assertTrue(desktopSpawned.await(3, TimeUnit.SECONDS))
             withTimeout(3_000L) {
-                engine.state.first { it is RuntimeState.Booting && engine.hasDesktopProcess() }
+                while (!(engine.state.value is RuntimeState.Booting && engine.hasDesktopProcess())) {
+                    delay(10L)
+                }
             }
 
             engine.stopRuntime()
