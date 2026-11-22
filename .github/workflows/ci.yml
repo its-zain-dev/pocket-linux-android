@@ -1,0 +1,137 @@
+name: PocketLinux CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-verify:
+    name: Build PRoot, Alpine Rootfs & Multi-ABI APKs
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install CI system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gawk binutils make python3 curl tar unzip gzip \
+            qemu-user-static binfmt-support
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Cache NDK PRoot binaries
+        uses: actions/cache@v4
+        with:
+          path: app/src/main/jniLibs
+          key: ${{ runner.os }}-proot-v1-${{ hashFiles('scripts/ci/build-proot.sh') }}
+
+      - name: Build PRoot & unbundled loader (arm64-v8a & x86_64)
+        run: bash scripts/ci/build-proot.sh --skip-existing
+
+      - name: Cache Alpine v3.20 rootfs tarballs
+        uses: actions/cache@v4
+        with:
+          path: |
+            app/src/arm64/assets/rootfs-arm64-v8a.tar.gz
+            app/src/x86_64/assets/rootfs-x86_64.tar.gz
+          key: ${{ runner.os }}-rootfs-v3.20-${{ hashFiles('scripts/ci/build-rootfs.sh', 'scripts/ci/rootfs-overlay/**') }}
+
+      - name: Build Alpine v3.20 rootfs tarballs (aarch64 & x86_64)
+        run: bash scripts/ci/build-rootfs.sh --skip-existing
+
+      - name: Smoke test rootfs tarballs via chroot & qemu-aarch64-static
+        run: |
+          set -euo pipefail
+
+          smoke_check_rootfs() {
+            local tar_path="$1"
+            local use_qemu="$2"
+            local stage="$RUNNER_TEMP/smoke-$use_qemu-$$"
+            cleanup_stage() {
+              if mountpoint -q "$stage/proc" 2>/dev/null; then
+                sudo umount -l "$stage/proc" || true
+              fi
+              sudo rm -rf "$stage" || true
+            }
+            trap cleanup_stage RETURN
+
+            mkdir -p "$stage"
+            sudo tar -xzf "$tar_path" -C "$stage"
+            if [[ "$use_qemu" == "aarch64" ]]; then
+              sudo cp /usr/bin/qemu-aarch64-static "$stage/usr/bin/qemu-aarch64-static"
+              sudo chmod 0755 "$stage/usr/bin/qemu-aarch64-static"
+            fi
+            sudo mount -t proc proc "$stage/proc"
+
+            sudo chroot "$stage" /bin/sh -c '
+              set -eu
+              /bin/bash --version | head -n 1
+              apk --version
+              python3 --version
+              xvnc_out="$(Xvnc -help 2>&1 || true)"
+              printf "%s\n" "$xvnc_out" | grep -qi "Xvnc"
+              jwm_out="$(jwm -v 2>&1 || true)"
+              printf "%s\n" "$jwm_out" | grep -qi "JWM"
+              /usr/local/bin/sysinfo.sh
+            '
+          }
+
+          smoke_check_rootfs "app/src/arm64/assets/rootfs-arm64-v8a.tar.gz" "aarch64"
+          smoke_check_rootfs "app/src/x86_64/assets/rootfs-x86_64.tar.gz" "x86_64"
+
+      - name: Run Gradle unit tests, lint, and assemble multi-ABI APKs
+        run: |
+          ./gradlew --no-daemon \
+            testArm64DebugUnitTest \
+            testX86_64DebugUnitTest \
+            lintArm64Debug \
+            lintX86_64Debug \
+            assembleArm64Debug \
+            assembleX86_64Debug
+
+      - name: Verify arm64 and x86_64 APKs
+        run: |
+          python3 scripts/ci/verify-apk.py \
+            --apk app/build/outputs/apk/arm64/debug/app-arm64-debug.apk \
+            --abi arm64-v8a
+          python3 scripts/ci/verify-apk.py \
+            --apk app/build/outputs/apk/x86_64/debug/app-x86_64-debug.apk \
+            --abi x86_64
+
+      - name: Upload arm64 debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: pocketlinux-arm64-debug-apk
+          path: app/build/outputs/apk/arm64/debug/app-arm64-debug.apk
+          if-no-files-found: error
+
+      - name: Upload x86_64 debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: pocketlinux-x86_64-debug-apk
+          path: app/build/outputs/apk/x86_64/debug/app-x86_64-debug.apk
+          if-no-files-found: error
+
+      - name: Upload lint & test reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-reports
+          path: app/build/reports/
+          if-no-files-found: ignore

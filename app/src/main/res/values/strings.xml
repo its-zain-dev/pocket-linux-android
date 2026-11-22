@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">PocketLinux</string>
+    <string name="runtime_channel_name">Linux Runtime</string>
+    <string name="runtime_channel_desc">Status for the local Linux environment and X11 display server</string>
+</resources>

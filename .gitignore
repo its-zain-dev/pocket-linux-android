@@ -1,0 +1,26 @@
+# Gradle & Build outputs
+.gradle/
+build/
+app/build/
+captures/
+.cxx/
+
+# IDE & Local config
+.idea/
+*.iml
+local.properties
+
+# CI-generated native binaries & rootfs assets
+app/src/main/jniLibs/
+app/src/*/assets/rootfs-*.tar.gz
+
+# Temporary build / work / staging directories
+tmp/
+work/
+staging/
+*.apk
+*.aab
+*.log
+.DS_Store
+__pycache__/
+*.pyc
