@@ -104,9 +104,11 @@ class TouchInputController(
             }
         }
 
+    @Volatile
     var cursorX: Int = -1
         private set
 
+    @Volatile
     var cursorY: Int = -1
         private set
 

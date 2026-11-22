@@ -31,13 +31,14 @@ class RfbClient(
     private val _connectionState = MutableStateFlow<RfbConnectionState>(RfbConnectionState.Disconnected)
     override val connectionState: StateFlow<RfbConnectionState> = _connectionState.asStateFlow()
 
-    private val framebuffer = RfbFramebuffer()
+    @Volatile
+    private var activeFramebuffer: RfbFramebuffer = RfbFramebuffer()
 
     override val desktopWidth: Int
-        get() = framebuffer.width
+        get() = activeFramebuffer.width
 
     override val desktopHeight: Int
-        get() = framebuffer.height
+        get() = activeFramebuffer.height
 
     val frameGeneration = AtomicLong(0L)
 
@@ -74,7 +75,11 @@ class RfbClient(
     override fun connect(host: String, port: Int) {
         if (host.isBlank() || port !in 1..65535) {
             disconnect()
-            _connectionState.value = RfbConnectionState.Error("Invalid VNC endpoint: $host:$port")
+            synchronized(lifecycleLock) {
+                if (_connectionState.value == RfbConnectionState.Disconnected) {
+                    _connectionState.value = RfbConnectionState.Error("Invalid VNC endpoint: $host:$port")
+                }
+            }
             return
         }
 
@@ -83,6 +88,7 @@ class RfbClient(
         val oldReader: Thread?
         val gen: Long
         val newWriter: ExecutorService
+        val reader: Thread
 
         synchronized(lifecycleLock) {
             gen = ++connectionGeneration
@@ -92,6 +98,7 @@ class RfbClient(
 
             activeSocket = null
             activeOutput = null
+            activeFramebuffer = RfbFramebuffer()
             supportsExtendedDesktopSize = false
             primaryScreenId = 0L
             currentServerName = ""
@@ -105,19 +112,39 @@ class RfbClient(
             }
             writerExecutor = newWriter
 
-            val reader = Thread(
+            reader = Thread(
                 { runSession(gen, host, port, newWriter) },
                 "PocketLinux-RFB-Reader-$gen"
             ).apply {
                 isDaemon = true
             }
             readerThread = reader
-            reader.start()
         }
 
         closeQuietly(oldSocket)
         oldWriter?.shutdownNow()
         oldReader?.interrupt()
+        if (oldReader != null && oldReader !== Thread.currentThread()) {
+            try {
+                oldReader.join(100)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+        }
+
+        synchronized(lifecycleLock) {
+            if (connectionGeneration != gen) {
+                newWriter.shutdownNow()
+                if (writerExecutor === newWriter) {
+                    writerExecutor = null
+                }
+                if (readerThread === reader) {
+                    readerThread = null
+                }
+                return
+            }
+            reader.start()
+        }
     }
 
     override fun disconnect() {
@@ -135,6 +162,7 @@ class RfbClient(
             activeOutput = null
             writerExecutor = null
             readerThread = null
+            activeFramebuffer = RfbFramebuffer()
             supportsExtendedDesktopSize = false
             primaryScreenId = 0L
             currentServerName = ""
@@ -144,11 +172,17 @@ class RfbClient(
         closeQuietly(oldSocket)
         oldWriter?.shutdownNow()
         oldReader?.interrupt()
+        if (oldReader != null && oldReader !== Thread.currentThread()) {
+            try {
+                oldReader.join(100)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+        }
     }
 
     override fun sendPointerEvent(x: Int, y: Int, buttonMask: Int) {
-        val w = framebuffer.width
-        val h = framebuffer.height
+        val (w, h) = activeFramebuffer.dimensions()
         if (w <= 0 || h <= 0) return
         val clampedX = x.coerceIn(0, w - 1)
         val clampedY = y.coerceIn(0, h - 1)
@@ -165,14 +199,21 @@ class RfbClient(
     }
 
     override fun requestDesktopSize(width: Int, height: Int) {
-        if (!supportsExtendedDesktopSize) return
         try {
             RfbFramebuffer.validateDimensions(width, height)
         } catch (_: IllegalArgumentException) {
             return
         }
-        val screenId = primaryScreenId
-        enqueueWrite { out ->
+        val gen: Long
+        val executor: ExecutorService
+        val screenId: Long
+        synchronized(lifecycleLock) {
+            if (!supportsExtendedDesktopSize) return
+            gen = connectionGeneration
+            executor = writerExecutor ?: return
+            screenId = primaryScreenId
+        }
+        enqueueWriteForGeneration(gen, executor) { out ->
             RfbProtocol.writeSetDesktopSize(out, width, height, screenId)
         }
     }
@@ -183,8 +224,10 @@ class RfbClient(
         }
     }
 
+    fun snapshotFrame(): FrameSnapshot? = activeFramebuffer.snapshotPixels()
+
     override fun snapshotBitmap(): Bitmap? {
-        val snap = framebuffer.snapshotPixels() ?: return null
+        val snap = activeFramebuffer.snapshotPixels() ?: return null
         return Bitmap.createBitmap(snap.pixels, snap.width, snap.height, Bitmap.Config.ARGB_8888)
     }
 
@@ -194,7 +237,8 @@ class RfbClient(
      */
     fun renderIntoBitmap(reusable: Bitmap?): Bitmap? {
         for (attempt in 0 until 2) {
-            val (w, h) = framebuffer.dimensions()
+            val fb = activeFramebuffer
+            val (w, h) = fb.dimensions()
             if (w <= 0 || h <= 0) return null
 
             val target = if (
@@ -215,7 +259,7 @@ class RfbClient(
                 if (renderScratch.size < needed) {
                     renderScratch = IntArray(needed)
                 }
-                if (framebuffer.copyPixelsInto(renderScratch, w, h)) {
+                if (fb.copyPixelsInto(renderScratch, w, h)) {
                     target.setPixels(renderScratch, 0, w, 0, 0, w, h)
                     return target
                 }
@@ -236,6 +280,7 @@ class RfbClient(
     ) {
         var socket: Socket? = null
         val protocol = RfbProtocol()
+        val sessionFramebuffer = RfbFramebuffer()
 
         try {
             val s = Socket()
@@ -258,8 +303,13 @@ class RfbClient(
             val serverInit = RfbProtocol.performHandshake(input, output)
             s.soTimeout = 0
 
-            framebuffer.resize(serverInit.width, serverInit.height)
-            currentServerName = serverInit.serverName
+            sessionFramebuffer.resize(serverInit.width, serverInit.height)
+
+            synchronized(lifecycleLock) {
+                if (connectionGeneration != gen) {
+                    return
+                }
+            }
 
             synchronized(writeLock) {
                 RfbProtocol.writeSetPixelFormat(output, flush = false)
@@ -279,6 +329,8 @@ class RfbClient(
                 if (connectionGeneration != gen) {
                     return
                 }
+                currentServerName = serverInit.serverName
+                activeFramebuffer = sessionFramebuffer
                 activeOutput = output
                 _connectionState.value = RfbConnectionState.Connected(
                     width = serverInit.width,
@@ -289,15 +341,23 @@ class RfbClient(
 
             val listener = object : RfbProtocol.ServerMessageListener {
                 override fun onFramebufferUpdated(resized: Boolean) {
-                    frameGeneration.incrementAndGet()
+                    val active = synchronized(lifecycleLock) {
+                        if (connectionGeneration != gen) {
+                            false
+                        } else {
+                            frameGeneration.incrementAndGet()
+                            true
+                        }
+                    }
+                    if (!active) return
                     for (cb in frameListeners) {
                         cb()
                     }
-                    synchronized(lifecycleLock) {
-                        if (connectionGeneration != gen) return
-                    }
-                    val (w, h) = framebuffer.dimensions()
+                    val (w, h) = sessionFramebuffer.dimensions()
                     if (w > 0 && h > 0) {
+                        synchronized(lifecycleLock) {
+                            if (connectionGeneration != gen) return
+                        }
                         synchronized(writeLock) {
                             RfbProtocol.writeFramebufferUpdateRequest(
                                 output = output,
@@ -318,27 +378,32 @@ class RfbClient(
                     extended: Boolean,
                     primaryScreenId: Long
                 ) {
-                    if (extended) {
-                        supportsExtendedDesktopSize = true
-                        this@RfbClient.primaryScreenId = primaryScreenId
-                    }
                     synchronized(lifecycleLock) {
-                        if (connectionGeneration == gen) {
-                            _connectionState.value = RfbConnectionState.Connected(
-                                width = width,
-                                height = height,
-                                serverName = currentServerName
-                            )
+                        if (connectionGeneration != gen) return
+                        if (extended) {
+                            supportsExtendedDesktopSize = true
+                            this@RfbClient.primaryScreenId = primaryScreenId
                         }
+                        _connectionState.value = RfbConnectionState.Connected(
+                            width = width,
+                            height = height,
+                            serverName = currentServerName
+                        )
                     }
                 }
 
                 override fun onBell() {
-                    this@RfbClient.onBell()
+                    val active = synchronized(lifecycleLock) { connectionGeneration == gen }
+                    if (active) {
+                        this@RfbClient.onBell()
+                    }
                 }
 
                 override fun onServerCutText(text: String) {
-                    this@RfbClient.onServerCutText(text)
+                    val active = synchronized(lifecycleLock) { connectionGeneration == gen }
+                    if (active) {
+                        this@RfbClient.onServerCutText(text)
+                    }
                 }
             }
 
@@ -346,7 +411,7 @@ class RfbClient(
                 synchronized(lifecycleLock) {
                     if (connectionGeneration != gen) return
                 }
-                protocol.readServerMessage(input, framebuffer, listener)
+                protocol.readServerMessage(input, sessionFramebuffer, listener)
             }
         } catch (t: Throwable) {
             synchronized(lifecycleLock) {
@@ -384,6 +449,14 @@ class RfbClient(
             gen = connectionGeneration
             executor = writerExecutor ?: return
         }
+        enqueueWriteForGeneration(gen, executor, action)
+    }
+
+    private inline fun enqueueWriteForGeneration(
+        gen: Long,
+        executor: ExecutorService,
+        crossinline action: (DataOutputStream) -> Unit
+    ) {
         try {
             executor.execute {
                 val out = synchronized(lifecycleLock) {
