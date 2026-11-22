@@ -162,7 +162,8 @@ CROSS_EOF
 
         make -j"$(nproc)"
         mkdir -p "$talloc_prefix/lib" "$talloc_prefix/include"
-        "$AR" rcu "$talloc_prefix/lib/libtalloc.a" bin/default/talloc*.o
+        mapfile -t replace_objs < <(find bin/default/lib/replace -name '*.o' ! -name '*test*' 2>/dev/null || true)
+        "$AR" rcu "$talloc_prefix/lib/libtalloc.a" bin/default/talloc*.o "${replace_objs[@]}"
         "$RANLIB" "$talloc_prefix/lib/libtalloc.a"
         cp talloc.h "$talloc_prefix/include/talloc.h"
     )
