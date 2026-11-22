@@ -84,13 +84,17 @@ android {
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2024.12.01"))
     implementation("androidx.activity:activity-compose:1.9.3")
+    implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("org.apache.commons:commons-compress:1.28.0")
 
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
+    testImplementation("org.json:json:20240303")
 
     androidTestImplementation(platform("androidx.compose:compose-bom:2024.12.01"))
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
@@ -111,7 +115,9 @@ val flavorAbiMap = mapOf(
     "X86_64" to ("x86_64" to "x86_64")
 )
 
-tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.configureEach {
+tasks.matching {
+    it.name.startsWith("merge") && it.name.endsWith("Assets") && !it.name.contains("Test")
+}.configureEach {
     val taskName = name
     val match = flavorAbiMap.entries.firstOrNull { taskName.contains(it.key) }
     if (match != null) {

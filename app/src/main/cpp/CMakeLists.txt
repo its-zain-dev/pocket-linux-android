@@ -7,7 +7,7 @@ add_library(
     pty_bridge.c
 )
 
-target_compile_options(ptybridge PRIVATE -Wall -Wextra)
+target_compile_options(ptybridge PRIVATE -Wall -Wextra -Werror)
 
 find_library(log-lib log)
 
