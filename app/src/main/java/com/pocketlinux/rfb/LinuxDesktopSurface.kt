@@ -1,0 +1,464 @@
+package com.pocketlinux.rfb
+
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.RectF
+import android.text.InputType
+import android.view.KeyEvent
+import android.view.SurfaceHolder
+import android.view.SurfaceView
+import android.view.inputmethod.BaseInputConnection
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.viewinterop.AndroidView
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
+
+@Composable
+fun LinuxDesktopSurface(
+    controller: RfbController,
+    modifier: Modifier = Modifier,
+    touchInputMode: TouchInputMode = TouchInputMode.DIRECT_TAP
+) {
+    val currentController by rememberUpdatedState(controller)
+    val currentMode by rememberUpdatedState(touchInputMode)
+    val connectionState by controller.connectionState.collectAsState()
+    val scope = rememberCoroutineScope()
+
+    val surfaceHolderRef = remember { arrayOfNulls<DesktopSurfaceView>(1) }
+    val viewSizeRef = remember { arrayOf(IntSize.Zero) }
+
+    val touchController = remember(controller) {
+        TouchInputController(
+            mode = touchInputMode,
+            onPointerEvent = { x, y, mask ->
+                currentController.sendPointerEvent(x, y, mask)
+                if (currentMode == TouchInputMode.TRACKPAD) {
+                    surfaceHolderRef[0]?.requestRender()
+                }
+            }
+        )
+    }
+
+    LaunchedEffect(touchInputMode) {
+        touchController.mode = touchInputMode
+        surfaceHolderRef[0]?.requestRender()
+    }
+
+    LaunchedEffect(connectionState) {
+        surfaceHolderRef[0]?.requestRender()
+    }
+
+    DisposableEffect(controller) {
+        val removeListener = if (controller is RfbClient) {
+            controller.addFrameListener {
+                surfaceHolderRef[0]?.requestRender()
+            }
+        } else {
+            null
+        }
+        onDispose {
+            removeListener?.invoke()
+            touchController.onTouchCancel()
+        }
+    }
+
+    Box(
+        modifier = modifier
+            .testTag("desktop_surface")
+            .focusable()
+            .onSizeChanged { viewSizeRef[0] = it }
+            .onPreviewKeyEvent { composeKeyEvent ->
+                val nativeEvent = composeKeyEvent.nativeKeyEvent
+                dispatchNativeKeyEvent(currentController, nativeEvent)
+            }
+            .pointerInput(controller) {
+                awaitEachGesture {
+                    val firstDown = awaitFirstDown(requireUnconsumed = false)
+                    surfaceHolderRef[0]?.requestFocus()
+
+                    val size = viewSizeRef[0]
+                    val dw = currentController.desktopWidth
+                    val dh = currentController.desktopHeight
+                    touchController.onTouchDown(
+                        pointerId = firstDown.id.value.toInt(),
+                        x = firstDown.position.x,
+                        y = firstDown.position.y,
+                        viewWidth = size.width,
+                        viewHeight = size.height,
+                        desktopWidth = dw,
+                        desktopHeight = dh,
+                        nowMs = System.currentTimeMillis()
+                    )
+                    firstDown.consume()
+
+                    var longPressJob: Job? = scope.launch {
+                        delay(500L)
+                        if (touchController.checkLongPress(System.currentTimeMillis())) {
+                            surfaceHolderRef[0]?.requestRender()
+                        }
+                    }
+
+                    val activeIds = mutableSetOf(firstDown.id.value.toInt())
+
+                    try {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val currentSize = viewSizeRef[0]
+                            val w = currentController.desktopWidth
+                            val h = currentController.desktopHeight
+                            val now = System.currentTimeMillis()
+
+                            when (event.type) {
+                                PointerEventType.Press -> {
+                                    for (change in event.changes) {
+                                        val pid = change.id.value.toInt()
+                                        if (change.pressed && activeIds.add(pid)) {
+                                            longPressJob?.cancel()
+                                            longPressJob = null
+                                            touchController.onPointerDown(
+                                                pointerId = pid,
+                                                x = change.position.x,
+                                                y = change.position.y,
+                                                nowMs = now
+                                            )
+                                        }
+                                        change.consume()
+                                    }
+                                }
+                                PointerEventType.Move -> {
+                                    val movedMap = HashMap<Int, Pair<Float, Float>>(event.changes.size)
+                                    for (change in event.changes) {
+                                        movedMap[change.id.value.toInt()] =
+                                            change.position.x to change.position.y
+                                        change.consume()
+                                    }
+                                    touchController.onTouchMove(
+                                        pointers = movedMap,
+                                        viewWidth = currentSize.width,
+                                        viewHeight = currentSize.height,
+                                        desktopWidth = w,
+                                        desktopHeight = h,
+                                        nowMs = now
+                                    )
+                                }
+                                PointerEventType.Release -> {
+                                    for (change in event.changes) {
+                                        val pid = change.id.value.toInt()
+                                        if (!change.pressed && activeIds.remove(pid)) {
+                                            longPressJob?.cancel()
+                                            longPressJob = null
+                                            if (activeIds.isEmpty()) {
+                                                touchController.onTouchUp(
+                                                    pointerId = pid,
+                                                    x = change.position.x,
+                                                    y = change.position.y,
+                                                    viewWidth = currentSize.width,
+                                                    viewHeight = currentSize.height,
+                                                    desktopWidth = w,
+                                                    desktopHeight = h,
+                                                    nowMs = now
+                                                )
+                                            } else {
+                                                touchController.onPointerUp(pid, now)
+                                            }
+                                        }
+                                        change.consume()
+                                    }
+                                    if (activeIds.isEmpty()) break
+                                }
+                                else -> {
+                                    for (change in event.changes) {
+                                        if (!change.pressed) {
+                                            activeIds.remove(change.id.value.toInt())
+                                        }
+                                        change.consume()
+                                    }
+                                    if (activeIds.isEmpty()) {
+                                        touchController.onTouchCancel()
+                                        break
+                                    }
+                                }
+                            }
+                        }
+                    } finally {
+                        longPressJob?.cancel()
+                    }
+                }
+            }
+    ) {
+        AndroidView(
+            factory = { ctx ->
+                DesktopSurfaceView(
+                    context = ctx,
+                    controllerProvider = { currentController },
+                    touchController = touchController,
+                    modeProvider = { currentMode }
+                ).also { view ->
+                    surfaceHolderRef[0] = view
+                }
+            },
+            update = { view ->
+                surfaceHolderRef[0] = view
+                view.requestRender()
+            },
+            modifier = Modifier.fillMaxSize()
+        )
+    }
+}
+
+private fun dispatchNativeKeyEvent(
+    controller: RfbController,
+    event: KeyEvent
+): Boolean {
+    val down = when (event.action) {
+        KeyEvent.ACTION_DOWN -> true
+        KeyEvent.ACTION_UP -> false
+        KeyEvent.ACTION_MULTIPLE -> {
+            val chars = event.characters
+            if (!chars.isNullOrEmpty()) {
+                for (ks in KeySymMapper.textToKeySymSequence(chars)) {
+                    controller.sendKeyEvent(ks, true)
+                    controller.sendKeyEvent(ks, false)
+                }
+                return true
+            }
+            return false
+        }
+        else -> return false
+    }
+
+    val keySym = KeySymMapper.mapAndroidKeyCode(
+        keyCode = event.keyCode,
+        unicodeChar = event.unicodeChar,
+        isShiftPressed = event.isShiftPressed
+    ) ?: return false
+
+    controller.sendKeyEvent(keySym, down)
+    return true
+}
+
+private class DesktopSurfaceView(
+    context: Context,
+    private val controllerProvider: () -> RfbController,
+    private val touchController: TouchInputController,
+    private val modeProvider: () -> TouchInputMode
+) : SurfaceView(context), SurfaceHolder.Callback {
+
+    private val renderLock = Any()
+    private val renderScheduled = AtomicBoolean(false)
+    private val bitmapPaint = Paint().apply {
+        isFilterBitmap = true
+    }
+    private val cursorFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        style = Paint.Style.FILL
+    }
+    private val cursorStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.BLACK
+        style = Paint.Style.STROKE
+        strokeWidth = 2.5f
+    }
+    private val dstRect = RectF()
+
+    @Volatile
+    private var surfaceActive = false
+    private var renderExecutor: ExecutorService? = null
+    private var reusableBitmap: Bitmap? = null
+
+    init {
+        isFocusable = true
+        isFocusableInTouchMode = true
+        holder.addCallback(this)
+    }
+
+    override fun onCheckIsTextEditor(): Boolean = true
+
+    override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
+        outAttrs.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+        outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_ACTION_NONE
+        return object : BaseInputConnection(this, false) {
+            override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
+                val str = text?.toString().orEmpty()
+                if (str.isNotEmpty()) {
+                    val controller = controllerProvider()
+                    for (ks in KeySymMapper.textToKeySymSequence(str)) {
+                        controller.sendKeyEvent(ks, true)
+                        controller.sendKeyEvent(ks, false)
+                    }
+                }
+                return true
+            }
+
+            override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
+                val controller = controllerProvider()
+                repeat(beforeLength.coerceAtLeast(0)) {
+                    controller.sendKeyEvent(KeySymMapper.XK_BACKSPACE, true)
+                    controller.sendKeyEvent(KeySymMapper.XK_BACKSPACE, false)
+                }
+                repeat(afterLength.coerceAtLeast(0)) {
+                    controller.sendKeyEvent(KeySymMapper.XK_DELETE, true)
+                    controller.sendKeyEvent(KeySymMapper.XK_DELETE, false)
+                }
+                return true
+            }
+
+            override fun sendKeyEvent(event: KeyEvent): Boolean {
+                return dispatchNativeKeyEvent(controllerProvider(), event) || super.sendKeyEvent(event)
+            }
+        }
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        return dispatchNativeKeyEvent(controllerProvider(), event) || super.onKeyDown(keyCode, event)
+    }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
+        return dispatchNativeKeyEvent(controllerProvider(), event) || super.onKeyUp(keyCode, event)
+    }
+
+    override fun surfaceCreated(holder: SurfaceHolder) {
+        synchronized(renderLock) {
+            surfaceActive = true
+            if (renderExecutor == null) {
+                renderExecutor = Executors.newSingleThreadExecutor { runnable ->
+                    Thread(runnable, "PocketLinux-SurfaceRender").apply {
+                        isDaemon = true
+                    }
+                }
+            }
+        }
+        requestRender()
+    }
+
+    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+        requestRender()
+    }
+
+    override fun surfaceDestroyed(holder: SurfaceHolder) {
+        val oldExecutor: ExecutorService?
+        synchronized(renderLock) {
+            surfaceActive = false
+            oldExecutor = renderExecutor
+            renderExecutor = null
+            reusableBitmap?.recycle()
+            reusableBitmap = null
+        }
+        oldExecutor?.shutdownNow()
+    }
+
+    fun requestRender() {
+        val executor = synchronized(renderLock) {
+            if (!surfaceActive) return
+            renderExecutor
+        } ?: return
+
+        if (renderScheduled.compareAndSet(false, true)) {
+            try {
+                executor.execute {
+                    renderScheduled.set(false)
+                    drawFrame()
+                }
+            } catch (_: java.util.concurrent.RejectedExecutionException) {
+                renderScheduled.set(false)
+            }
+        }
+    }
+
+    private fun drawFrame() {
+        synchronized(renderLock) {
+            if (!surfaceActive || !holder.surface.isValid) return
+
+            val controller = controllerProvider()
+            var ownedSnapshot: Bitmap? = null
+            val frameBitmap = if (controller is RfbClient) {
+                reusableBitmap = controller.renderIntoBitmap(reusableBitmap)
+                reusableBitmap
+            } else {
+                ownedSnapshot = controller.snapshotBitmap()
+                ownedSnapshot
+            }
+
+            val canvas = try {
+                holder.lockHardwareCanvas()
+            } catch (_: UnsupportedOperationException) {
+                holder.lockCanvas()
+            } catch (_: IllegalStateException) {
+                null
+            }
+
+            if (canvas == null) {
+                ownedSnapshot?.recycle()
+                return
+            }
+
+            try {
+                canvas.drawColor(0xFF0B1120.toInt())
+                if (frameBitmap != null && !frameBitmap.isRecycled) {
+                    val vp = computeViewport(
+                        viewWidth = canvas.width,
+                        viewHeight = canvas.height,
+                        desktopWidth = frameBitmap.width,
+                        desktopHeight = frameBitmap.height
+                    )
+                    if (vp != null) {
+                        dstRect.set(
+                            vp.offsetX,
+                            vp.offsetY,
+                            vp.offsetX + vp.scaledWidth,
+                            vp.offsetY + vp.scaledHeight
+                        )
+                        canvas.drawBitmap(frameBitmap, null, dstRect, bitmapPaint)
+
+                        if (
+                            modeProvider() == TouchInputMode.TRACKPAD &&
+                            touchController.cursorX in 0 until frameBitmap.width &&
+                            touchController.cursorY in 0 until frameBitmap.height
+                        ) {
+                            val (cx, cy) = desktopToView(
+                                touchController.cursorX,
+                                touchController.cursorY,
+                                vp
+                            )
+                            canvas.drawCircle(cx, cy, 7f, cursorFillPaint)
+                            canvas.drawCircle(cx, cy, 7f, cursorStrokePaint)
+                        }
+                    }
+                }
+            } finally {
+                try {
+                    holder.unlockCanvasAndPost(canvas)
+                } catch (_: IllegalStateException) {
+                } catch (_: IllegalArgumentException) {
+                }
+                ownedSnapshot?.recycle()
+            }
+        }
+    }
+}
