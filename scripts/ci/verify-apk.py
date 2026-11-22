@@ -95,7 +95,8 @@ def verify_rootfs_tar_gz(fileobj: io.BufferedReader, abi: str) -> None:
                 symlink_count += 1
             if member.ischr() or member.isblk() or member.isfifo():
                 special_files.append(norm)
-            if os.path.basename(norm).startswith("qemu-") and os.path.basename(norm).endswith("-static"):
+            base = os.path.basename(norm)
+            if base.startswith("qemu-") and (base.endswith("-static") or base in ("qemu-aarch64", "qemu-x86_64")):
                 qemu_helpers.append(norm)
             if norm in REQUIRED_EXECUTABLE_ROOTFS and (member.mode & 0o111) == 0:
                 non_exec.append(f"{norm} (mode={oct(member.mode)})")

@@ -89,9 +89,14 @@ trap cleanup EXIT
 mkdir -p "$WORK_DIR/downloads" "$WORK_DIR/apk-tools"
 
 # Ensure binfmt_misc has qemu-aarch64 enabled if arm64-v8a is requested
+QEMU_AARCH64_BIN=""
 if [[ " ${REQUESTED_ABIS[*]} " == *" arm64-v8a "* ]]; then
-    if [[ ! -x /usr/bin/qemu-aarch64-static ]]; then
-        echo "ERROR: /usr/bin/qemu-aarch64-static not found. Install qemu-user-static." >&2
+    if [[ -x /usr/bin/qemu-aarch64-static ]]; then
+        QEMU_AARCH64_BIN="/usr/bin/qemu-aarch64-static"
+    elif [[ -x /usr/bin/qemu-aarch64 ]]; then
+        QEMU_AARCH64_BIN="/usr/bin/qemu-aarch64"
+    else
+        echo "ERROR: Neither /usr/bin/qemu-aarch64-static nor /usr/bin/qemu-aarch64 found." >&2
         exit 1
     fi
     if command -v update-binfmts >/dev/null 2>&1; then
@@ -193,8 +198,11 @@ PYEOF
     sudo tar -xzf "$mini_tar" -C "$rootfs"
 
     if [[ "$alpine_arch" == "aarch64" ]]; then
-        sudo cp /usr/bin/qemu-aarch64-static "$rootfs/usr/bin/qemu-aarch64-static"
-        sudo chmod 0755 "$rootfs/usr/bin/qemu-aarch64-static"
+        # Copy qemu binary into rootfs only if binfmt_misc lacks the F (fix-binary) flag
+        if ! grep -qsE 'flags:.*F' /proc/sys/fs/binfmt_misc/qemu-aarch64 2>/dev/null; then
+            sudo cp "$QEMU_AARCH64_BIN" "$rootfs${QEMU_AARCH64_BIN}"
+            sudo chmod 0755 "$rootfs${QEMU_AARCH64_BIN}"
+        fi
     fi
 
     # Provide temporary DNS for apk/chroot if needed
@@ -219,7 +227,7 @@ PYEOF
     sudo chmod 0644 "$rootfs/etc/resolv.conf"
 
     # Strip emulator helper and apk caches; ensure tmp permissions
-    sudo rm -f "$rootfs/usr/bin/qemu-aarch64-static"
+    sudo rm -f "$rootfs/usr/bin/qemu-aarch64-static" "$rootfs/usr/bin/qemu-aarch64"
     sudo rm -rf "$rootfs/var/cache/apk/"*
     sudo mkdir -p "$rootfs/tmp/.X11-unix"
     sudo chmod 1777 "$rootfs/tmp" "$rootfs/tmp/.X11-unix"

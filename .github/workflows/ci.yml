@@ -22,9 +22,14 @@ jobs:
       - name: Install CI system dependencies
         run: |
           sudo apt-get update
+          if apt-cache policy qemu-user-static 2>/dev/null | grep -qE 'Candidate: [0-9]'; then
+            QEMU_PKGS="qemu-user-static binfmt-support"
+          else
+            QEMU_PKGS="qemu-user qemu-user-binfmt"
+          fi
           sudo apt-get install -y --no-install-recommends \
-            gawk binutils make python3 curl tar unzip gzip \
-            qemu-user-static binfmt-support
+            gawk binutils make python3 curl tar unzip gzip $QEMU_PKGS
+          ls -la /proc/sys/fs/binfmt_misc/ || true
 
       - name: Set up Java 17
         uses: actions/setup-java@v5
@@ -74,8 +79,11 @@ jobs:
             mkdir -p "$stage"
             sudo tar -xzf "$tar_path" -C "$stage"
             if [[ "$use_qemu" == "aarch64" ]]; then
-              sudo cp /usr/bin/qemu-aarch64-static "$stage/usr/bin/qemu-aarch64-static"
-              sudo chmod 0755 "$stage/usr/bin/qemu-aarch64-static"
+              if ! grep -qsE 'flags:.*F' /proc/sys/fs/binfmt_misc/qemu-aarch64 2>/dev/null; then
+                QEMU_BIN="$(command -v qemu-aarch64-static || command -v qemu-aarch64)"
+                sudo cp "$QEMU_BIN" "$stage${QEMU_BIN}"
+                sudo chmod 0755 "$stage${QEMU_BIN}"
+              fi
             fi
             sudo mount -t proc proc "$stage/proc"
 
