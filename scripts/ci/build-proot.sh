@@ -171,6 +171,10 @@ CROSS_EOF
     unzip -q "$PROOT_ZIP" -d "$abi_work"
     (
         cd "$abi_work/proot-${PROOT_VERSION}"
+        # Ensure ashmem_memfd.c includes <string.h> for strcmp/memset on newer Clang/NDK
+        if [[ -f src/extension/ashmem_memfd/ashmem_memfd.c ]] && ! grep -q '<string.h>' src/extension/ashmem_memfd/ashmem_memfd.c; then
+            sed -i '1i #include <string.h>' src/extension/ashmem_memfd/ashmem_memfd.c
+        fi
         unset LD
         export CC="$NDK_BIN/${target_triple}-clang"
         export AR="$NDK_BIN/llvm-ar"
@@ -179,7 +183,7 @@ CROSS_EOF
         export OBJCOPY="$NDK_BIN/llvm-objcopy"
         export OBJDUMP="$NDK_BIN/llvm-objdump"
         export CPPFLAGS="-DARG_MAX=131072 -DVERSION=\\\"${PROOT_VERSION}\\\" -I${talloc_prefix}/include"
-        export CFLAGS="-O2"
+        export CFLAGS="-O2 -Wno-error=implicit-function-declaration"
         export LDFLAGS="-L${talloc_prefix}/lib"
 
         make -C src -j"$(nproc)" PROOT_UNBUNDLE_LOADER="/data/data/com.pocketlinux/files/proot"
