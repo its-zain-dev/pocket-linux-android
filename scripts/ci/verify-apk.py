@@ -194,7 +194,8 @@ def main() -> None:
             print(f"[verify-apk] OK ELF64 ({args.abi}): {lib_path}")
 
         if expected_asset not in names:
-            fail(f"Missing rootfs asset: {expected_asset}")
+            actual_assets = sorted(n for n in names if n.startswith("assets/"))
+            fail(f"Missing rootfs asset: {expected_asset} (found assets: {actual_assets})")
         with zf.open(expected_asset, "r") as asset_stream:
             verify_rootfs_tar_gz(asset_stream, args.abi)
 

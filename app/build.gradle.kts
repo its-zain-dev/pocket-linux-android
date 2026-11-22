@@ -56,6 +56,10 @@ android {
         }
     }
 
+    androidResources {
+        noCompress += listOf("gz", "tgz")
+    }
+
     buildFeatures {
         compose = true
         buildConfig = true
@@ -98,4 +102,31 @@ dependencies {
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+}
+
+// AGP's MergedAssetWriter strips '.gz' and decompresses '.gz' files in assets/.
+// Restore the raw pre-compressed rootfs-<abi>.tar.gz verbatim after mergeAssets.
+val flavorAbiMap = mapOf(
+    "Arm64" to ("arm64" to "arm64-v8a"),
+    "X86_64" to ("x86_64" to "x86_64")
+)
+
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.configureEach {
+    val taskName = name
+    val match = flavorAbiMap.entries.firstOrNull { taskName.contains(it.key) }
+    if (match != null) {
+        val (flavorDir, abi) = match.value
+        val srcGz = layout.projectDirectory.file("src/$flavorDir/assets/rootfs-$abi.tar.gz").asFile
+        inputs.file(srcGz).optional()
+        doLast {
+            if (srcGz.exists()) {
+                val outDir = outputs.files.singleFile
+                val strippedTar = File(outDir, "rootfs-$abi.tar")
+                if (strippedTar.exists()) {
+                    strippedTar.delete()
+                }
+                srcGz.copyTo(File(outDir, "rootfs-$abi.tar.gz"), overwrite = true)
+            }
+        }
+    }
 }
