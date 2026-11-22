@@ -240,17 +240,6 @@ private fun dispatchNativeKeyEvent(
     val down = when (event.action) {
         KeyEvent.ACTION_DOWN -> true
         KeyEvent.ACTION_UP -> false
-        KeyEvent.ACTION_MULTIPLE -> {
-            val chars = event.characters
-            if (!chars.isNullOrEmpty()) {
-                for (ks in KeySymMapper.textToKeySymSequence(chars)) {
-                    controller.sendKeyEvent(ks, true)
-                    controller.sendKeyEvent(ks, false)
-                }
-                return true
-            }
-            return false
-        }
         else -> return false
     }
 
