@@ -107,7 +107,7 @@ fi
 # Fetch host (x86_64) apk-tools-static from Alpine v3.20 main
 APKINDEX_HOST="$WORK_DIR/downloads/APKINDEX-x86_64.tar.gz"
 curl -fsSL --retry 3 --retry-delay 2 "${ALPINE_MIRROR}/main/x86_64/APKINDEX.tar.gz" -o "$APKINDEX_HOST"
-APK_STATIC_PKG="$(tar -xOzf "$APKINDEX_HOST" APKINDEX | awk -F: '/^P:apk-tools-static$/{f=1} f&&/^V:/{print "apk-tools-static-"$2".apk"; exit}')"
+APK_STATIC_PKG="$(tar -ixOzf "$APKINDEX_HOST" APKINDEX | awk -F: '/^P:apk-tools-static$/{f=1; next} f&&/^V:/{res="apk-tools-static-"$2".apk"; f=0} END{if(res) print res}')"
 if [[ -z "$APK_STATIC_PKG" ]]; then
     echo "ERROR: Failed to resolve apk-tools-static version from APKINDEX" >&2
     exit 1
@@ -115,7 +115,7 @@ fi
 echo "Resolved host apk-tools-static: $APK_STATIC_PKG"
 
 curl -fsSL --retry 3 --retry-delay 2 "${ALPINE_MIRROR}/main/x86_64/${APK_STATIC_PKG}" -o "$WORK_DIR/downloads/${APK_STATIC_PKG}"
-tar -xzf "$WORK_DIR/downloads/${APK_STATIC_PKG}" -C "$WORK_DIR/apk-tools" sbin/apk.static
+tar -ixzf "$WORK_DIR/downloads/${APK_STATIC_PKG}" -C "$WORK_DIR/apk-tools" sbin/apk.static
 APK_STATIC="$WORK_DIR/apk-tools/sbin/apk.static"
 chmod +x "$APK_STATIC"
 
