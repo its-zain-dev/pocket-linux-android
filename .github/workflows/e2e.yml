@@ -1,0 +1,232 @@
+name: PocketLinux E2E Verification
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tiers:
+        description: 'E2E tiers to execute (all, 1, 2, 3, 4, none)'
+        required: false
+        default: 'all'
+        type: string
+      allow_missing_android_test:
+        description: 'Allow skipping am instrument when app/src/androidTest/ has zero test files'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-verify-apks:
+    name: Build Multi-ABI APKs & Static Verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install CI system dependencies
+        run: |
+          sudo apt-get update
+          if apt-cache policy qemu-user-static 2>/dev/null | grep -qE 'Candidate: [0-9]'; then
+            QEMU_PKGS="qemu-user-static binfmt-support"
+          else
+            QEMU_PKGS="qemu-user qemu-user-binfmt"
+          fi
+          sudo apt-get install -y --no-install-recommends \
+            gawk binutils make python3 curl tar unzip gzip $QEMU_PKGS
+          ls -la /proc/sys/fs/binfmt_misc/ || true
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Cache NDK PRoot binaries
+        uses: actions/cache@v4
+        with:
+          path: app/src/main/jniLibs
+          key: ${{ runner.os }}-proot-v1-${{ hashFiles('scripts/ci/build-proot.sh') }}
+
+      - name: Build PRoot & unbundled loader (arm64-v8a & x86_64)
+        run: bash scripts/ci/build-proot.sh --skip-existing
+
+      - name: Cache Alpine v3.20 rootfs tarballs
+        uses: actions/cache@v4
+        with:
+          path: |
+            app/src/arm64/assets/rootfs-arm64-v8a.tar.gz
+            app/src/x86_64/assets/rootfs-x86_64.tar.gz
+          key: ${{ runner.os }}-rootfs-v3.20-${{ hashFiles('scripts/ci/build-rootfs.sh', 'scripts/ci/rootfs-overlay/**') }}
+
+      - name: Build Alpine v3.20 rootfs tarballs (aarch64 & x86_64)
+        run: bash scripts/ci/build-rootfs.sh --skip-existing
+
+      - name: Assemble debug & androidTest APKs
+        run: |
+          ./gradlew --no-daemon \
+            assembleArm64Debug \
+            assembleX86_64Debug \
+            assembleX86_64DebugAndroidTest
+
+      - name: Verify arm64 and x86_64 APKs (static ELF64, rootfs, manifest, signature)
+        run: |
+          mkdir -p e2e-reports
+          python3 scripts/e2e/verify_apks.py \
+            --arm64-apk app/build/outputs/apk/arm64/debug/app-arm64-debug.apk \
+            --x86-64-apk app/build/outputs/apk/x86_64/debug/app-x86_64-debug.apk \
+            --require-aapt2 \
+            --require-apksigner \
+            --require-automation-receiver \
+            --out-json e2e-reports/apk-verification.json \
+            --out-md e2e-reports/apk-verification.md
+
+      - name: Upload arm64 debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: pocketlinux-arm64-debug-apk
+          path: app/build/outputs/apk/arm64/debug/app-arm64-debug.apk
+          if-no-files-found: error
+
+      - name: Upload x86_64 debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: pocketlinux-x86_64-debug-apk
+          path: app/build/outputs/apk/x86_64/debug/app-x86_64-debug.apk
+          if-no-files-found: error
+
+      - name: Upload x86_64 androidTest APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: pocketlinux-x86_64-androidtest-apk
+          path: app/build/outputs/apk/androidTest/x86_64/debug/app-x86_64-debug-androidTest.apk
+          if-no-files-found: error
+
+      - name: Upload static APK verification reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-verification-report
+          path: e2e-reports/apk-verification.*
+          if-no-files-found: ignore
+
+  e2e-emulator:
+    name: Emulator E2E (API ${{ matrix.api-level }})
+    needs: build-and-verify-apks
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        api-level: [30, 34]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Download arm64 debug APK
+        uses: actions/download-artifact@v4
+        with:
+          name: pocketlinux-arm64-debug-apk
+          path: artifacts
+
+      - name: Download x86_64 debug APK
+        uses: actions/download-artifact@v4
+        with:
+          name: pocketlinux-x86_64-debug-apk
+          path: artifacts
+
+      - name: Download x86_64 androidTest APK
+        uses: actions/download-artifact@v4
+        with:
+          name: pocketlinux-x86_64-androidtest-apk
+          path: artifacts
+
+      - name: Check and enable KVM access
+        run: |
+          ls -la /dev/kvm || true
+          if [ -e /dev/kvm ]; then
+            sudo chmod 666 /dev/kvm || true
+          fi
+
+      - name: Run E2E Suite on Android Emulator (API ${{ matrix.api-level }})
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api-level }}
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          ram-size: 4096
+          heap-size: 512
+          disk-size: 4096M
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          disable-animations: true
+          script: |
+            set -euo pipefail
+            OUT_DIR="e2e-reports/api-${{ matrix.api-level }}"
+            mkdir -p "$OUT_DIR"
+            trap 'adb logcat -d -v threadtime > "$OUT_DIR/logcat-full.txt" 2>/dev/null || true' EXIT
+
+            adb wait-for-device
+            if ! adb install -r -t -g artifacts/app-x86_64-debug.apk; then
+              adb install -r -t artifacts/app-x86_64-debug.apk
+            fi
+            SDK_LEVEL="$(adb shell getprop ro.build.version.sdk | tr -d '\r[:space:]')"
+            if [ "${SDK_LEVEL:-0}" -ge 33 ]; then
+              adb shell pm grant com.pocketlinux android.permission.POST_NOTIFICATIONS || true
+            fi
+
+            if ! adb shell dumpsys package com.pocketlinux | grep -q "AutomationReceiver"; then
+              echo "::error::M4 prerequisite missing: AutomationReceiver not registered in com.pocketlinux manifest"
+              exit 1
+            fi
+
+            bash scripts/e2e/run-e2e.sh \
+              --apk artifacts/app-x86_64-debug.apk \
+              --arm64-apk artifacts/app-arm64-debug.apk \
+              --abi x86_64 \
+              --tier "${{ inputs.tiers || 'all' }}" \
+              --out-dir "$OUT_DIR" \
+              --skip-install
+
+            ANDROID_TEST_FILES="$(find app/src/androidTest -type f \( -name '*.kt' -o -name '*.java' \) 2>/dev/null || true)"
+            if [ -z "$ANDROID_TEST_FILES" ]; then
+              if [ "${{ inputs.allow_missing_android_test || 'true' }}" = "true" ]; then
+                echo "::warning::No test files in app/src/androidTest/; skipping am instrument until E2E-2 lands."
+              else
+                echo "::error::No test files found in app/src/androidTest/."
+                exit 1
+              fi
+            else
+              adb install -r -t artifacts/app-x86_64-debug-androidTest.apk
+              adb shell am instrument -w -r com.pocketlinux.test/androidx.test.runner.AndroidJUnitRunner | tee "$OUT_DIR/instrumentation.log"
+              if grep -qE "FAILURES!!!|INSTRUMENTATION_FAILED|Process crashed" "$OUT_DIR/instrumentation.log"; then
+                echo "::error::Instrumentation tests failed."
+                exit 1
+              fi
+              if grep -q "OK (0 tests)" "$OUT_DIR/instrumentation.log" || ! grep -qE "OK \([1-9][0-9]* tests?\)" "$OUT_DIR/instrumentation.log"; then
+                echo "::error::Instrumentation did not execute >= 1 passing test."
+                exit 1
+              fi
+            fi
+
+      - name: Upload E2E reports and full logcat (API ${{ matrix.api-level }})
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-reports-api-${{ matrix.api-level }}
+          path: e2e-reports/api-${{ matrix.api-level }}
+          if-no-files-found: ignore

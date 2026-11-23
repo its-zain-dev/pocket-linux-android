@@ -224,6 +224,45 @@ class RfbClient(
         }
     }
 
+    /**
+     * Requests a full (non-incremental) framebuffer update from the RFB server and waits up to
+     * [waitMs] for [frameGeneration] to advance so callers see the latest X11 server pixels.
+     */
+    fun requestFullFrameUpdate(waitMs: Long = 350L): Boolean {
+        val (w, h) = activeFramebuffer.dimensions()
+        if (w <= 0 || h <= 0) return false
+        val startGen = frameGeneration.get()
+        enqueueWrite { out ->
+            RfbProtocol.writeFramebufferUpdateRequest(
+                output = out,
+                incremental = false,
+                x = 0,
+                y = 0,
+                width = w,
+                height = h,
+                flush = true
+            )
+        }
+        if (waitMs <= 0L) return true
+        val deadline = System.nanoTime() + waitMs * 1_000_000L
+        while (System.nanoTime() < deadline) {
+            if (frameGeneration.get() > startGen) {
+                return true
+            }
+            val state = _connectionState.value
+            if (state !is RfbConnectionState.Connected) {
+                return false
+            }
+            try {
+                Thread.sleep(20L)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                break
+            }
+        }
+        return frameGeneration.get() > startGen
+    }
+
     fun snapshotFrame(): FrameSnapshot? = activeFramebuffer.snapshotPixels()
 
     override fun snapshotBitmap(): Bitmap? {

@@ -583,6 +583,8 @@ internal class LinuxRuntimeEngine(
         runCatching {
             File(commandFactory.rootfsDir, "tmp/.pocketlinux_desktop_ready").delete()
             File(commandFactory.rootfsDir, "tmp/.pocketlinux_desktop_ready.tmp").delete()
+            File(commandFactory.rootfsDir, "tmp/.X1-lock").delete()
+            File(commandFactory.rootfsDir, "tmp/.X11-unix/X1").delete()
         }
     }
 

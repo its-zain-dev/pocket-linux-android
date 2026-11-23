@@ -134,8 +134,18 @@ class ProotCommandBuilder(
         display: String? = ":1",
         extraEnv: Map<String, String> = emptyMap()
     ): ProotCommand {
+        val trimmed = command.trim()
+        val effectiveShellCommand = when (trimmed) {
+            "xterm" -> "exec xterm -geometry 100x28+120+60"
+            "feh" -> "if [ ! -s /tmp/pocketlinux_sample.ppm ]; then " +
+                "printf 'P6\\n240 160\\n255\\n' > /tmp/pocketlinux_sample.ppm; " +
+                "python3 -c 'open(\"/tmp/pocketlinux_sample.ppm\",\"ab\").write(b\"\\x38\\xbd\\xf8\"*(240*160))' 2>/dev/null || " +
+                "dd if=/dev/zero bs=115200 count=1 >> /tmp/pocketlinux_sample.ppm 2>/dev/null || true; " +
+                "fi; exec feh --title 'feh - PocketLinux' /tmp/pocketlinux_sample.ppm"
+            else -> "exec $command"
+        }
         return buildCommand(
-            guestArgs = listOf("/bin/sh", "-c", "exec $command"),
+            guestArgs = listOf("/bin/sh", "-c", effectiveShellCommand),
             workingDir = workingDir,
             display = display,
             extraEnv = extraEnv

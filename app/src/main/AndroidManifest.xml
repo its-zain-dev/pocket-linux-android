@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -34,6 +35,19 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Local Linux userspace and X11 display runtime supervisor" />
         </service>
+
+        <receiver
+            android:name="com.pocketlinux.automation.AutomationReceiver"
+            android:exported="true"
+            tools:ignore="ExportedReceiver">
+            <intent-filter>
+                <action android:name="com.pocketlinux.ACTION_GET_STATUS" />
+                <action android:name="com.pocketlinux.ACTION_EXEC_LINUX" />
+                <action android:name="com.pocketlinux.ACTION_LAUNCH_GUI" />
+                <action android:name="com.pocketlinux.ACTION_VERIFY_DESKTOP_FRAME" />
+                <action android:name="com.pocketlinux.ACTION_START_RUNTIME" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>
