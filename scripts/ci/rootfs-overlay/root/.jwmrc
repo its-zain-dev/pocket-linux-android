@@ -1,7 +1,10 @@
 <?xml version="1.0"?>
 <JWM>
-    <!-- Categorized Start Menu (accessible from dock button or desktop right-click) -->
+    <!-- Categorized Start Menu -->
     <RootMenu onroot="12">
+        <Program label="App Store (PocketStore)" icon="system-software-install">pocketlinux-store.py</Program>
+        <Program label="Settings &amp; GPU" icon="preferences-system">pocketlinux-settings.py</Program>
+        <Separator/>
         <Program label="Terminal" icon="utilities-terminal">xterm -fa "DejaVu Sans Mono" -fs 12 -bg "#0F172A" -fg "#E2E8F0"</Program>
         <Program label="File Manager" icon="system-file-manager">pcmanfm /root</Program>
         <Separator/>
@@ -16,6 +19,8 @@
             <Program label="Image Viewer (feh)" icon="image-x-generic">feh /usr/share/backgrounds/pocketlinux-wallpaper.png</Program>
         </Menu>
         <Menu label="System" icon="applications-system">
+            <Program label="Settings &amp; GPU Control" icon="preferences-system">pocketlinux-settings.py</Program>
+            <Program label="App Store (PocketStore)" icon="system-software-install">pocketlinux-store.py</Program>
             <Program label="System Health &amp; ELF Check" icon="utilities-system-monitor">xterm -T "PocketLinux Health Check" -fa "DejaVu Sans Mono" -fs 11 -bg "#0F172A" -fg "#E2E8F0" -hold -e /usr/local/bin/linux-health.sh</Program>
             <Program label="Process Monitor (htop)" icon="utilities-system-monitor">xterm -T "htop" -fa "DejaVu Sans Mono" -fs 11 -bg "#0F172A" -fg "#E2E8F0" -e htop</Program>
             <Program label="System Info (sysinfo)" icon="dialog-information">xterm -T "System Info" -fa "DejaVu Sans Mono" -fs 11 -bg "#0F172A" -fg "#E2E8F0" -hold -e /usr/local/bin/sysinfo.sh --text</Program>
@@ -29,10 +34,11 @@
     <Tray x="0" y="-1" height="42" autohide="off" halign="fixed" valign="bottom">
         <TrayButton label=" Apps " icon="start-here">root:1</TrayButton>
         <Spacer width="4"/>
+        <TrayButton label=" Store " icon="system-software-install">exec:pocketlinux-store.py</TrayButton>
+        <TrayButton label=" Settings " icon="preferences-system">exec:pocketlinux-settings.py</TrayButton>
         <TrayButton label=" Term " icon="utilities-terminal">exec:xterm -fa "DejaVu Sans Mono" -fs 12 -bg "#0F172A" -fg "#E2E8F0"</TrayButton>
         <TrayButton label=" Files " icon="system-file-manager">exec:pcmanfm /root</TrayButton>
         <TrayButton label=" Edit " icon="accessories-text-editor">exec:mousepad</TrayButton>
-        <TrayButton label=" Calc " icon="accessories-calculator">exec:galculator</TrayButton>
         <Spacer width="6"/>
         <Pager labeled="true"/>
         <TaskList maxwidth="220"/>

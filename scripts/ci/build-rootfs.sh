@@ -49,6 +49,12 @@ PACKAGES=(
     desktop-file-utils
     shared-mime-info
     font-noto
+    # PocketStore & PocketLinux Settings (GTK-3 Python) + VirGL/Mesa GPU
+    py3-gobject3
+    mesa-dri-gallium
+    mesa-egl
+    mesa-gles
+    mesa-demos
 )
 
 SKIP_EXISTING=false
@@ -218,7 +224,9 @@ install_desktop_and_home() {
         "$rootfs/root/.config/gtk-3.0" \
         "$rootfs/root/.config/libfm" \
         "$rootfs/root/.config/pcmanfm/default" \
-        "$rootfs/usr/local/bin"
+        "$rootfs/usr/local/bin" \
+        "$rootfs/etc/profile.d" \
+        "$rootfs/root/.config/pocketlinux"
 
     sudo cp "$WALLPAPER_PNG" "$rootfs/usr/share/backgrounds/pocketlinux-wallpaper.png"
     sudo chmod 0644 "$rootfs/usr/share/backgrounds/pocketlinux-wallpaper.png"
@@ -327,6 +335,29 @@ XTerm*cursorColor: #38BDF8
 XTerm*scrollBar: false
 XTerm*saveLines: 4096
 XTerm*selectToClipboard: true
+EOF
+
+
+    cat <<'EOF' | sudo tee "$rootfs/root/Desktop/store.desktop" >/dev/null
+[Desktop Entry]
+Type=Application
+Name=App Store
+Comment=Install Linux Apps with Auto-Dependencies
+Exec=/usr/local/bin/pocketlinux-store.py
+Icon=system-software-install
+Terminal=false
+Categories=System;PackageManager;
+EOF
+
+    cat <<'EOF' | sudo tee "$rootfs/root/Desktop/settings.desktop" >/dev/null
+[Desktop Entry]
+Type=Application
+Name=Settings & GPU
+Comment=GPU Acceleration, Display & System Repair
+Exec=/usr/local/bin/pocketlinux-settings.py
+Icon=preferences-system
+Terminal=false
+Categories=Settings;System;
 EOF
 
     cat <<'EOF' | sudo tee "$rootfs/root/Desktop/terminal.desktop" >/dev/null
@@ -457,10 +488,14 @@ EOF
     sudo cp "$OVERLAY_DIR/usr/local/bin/sysinfo.sh" "$rootfs/usr/local/bin/sysinfo.sh"
     sudo cp "$OVERLAY_DIR/usr/local/bin/linux-health.sh" "$rootfs/usr/local/bin/linux-health.sh"
     sudo cp "$OVERLAY_DIR/usr/local/bin/run-elf.sh" "$rootfs/usr/local/bin/run-elf.sh"
+    sudo cp "$OVERLAY_DIR/usr/local/bin/pocketlinux-store.py" "$rootfs/usr/local/bin/pocketlinux-store.py"
+    sudo cp "$OVERLAY_DIR/usr/local/bin/pocketlinux-settings.py" "$rootfs/usr/local/bin/pocketlinux-settings.py"
+    sudo cp "$OVERLAY_DIR/etc/profile.d/pocketlinux-gpu.sh" "$rootfs/etc/profile.d/pocketlinux-gpu.sh"
 
     sudo chown -R 0:0 "$rootfs/root" "$rootfs/usr/local" "$rootfs/usr/share/backgrounds"
     sudo chmod 0644 \
         "$rootfs/root/.jwmrc" \
+        "$rootfs/etc/profile.d/pocketlinux-gpu.sh" \
         "$rootfs/root/.Xresources" \
         "$rootfs/root/.config/user-dirs.dirs" \
         "$rootfs/root/.config/gtk-3.0/settings.ini" \
@@ -470,13 +505,21 @@ EOF
         "$rootfs/root/.config/pcmanfm/default/desktop-items-0.conf" \
         "$rootfs/root/Documents/Welcome-to-PocketLinux.txt"
     sudo chmod 0755 \
-        "$rootfs/root/Desktop/terminal.desktop" "$rootfs/root/Desktop/files.desktop" "$rootfs/root/Desktop/editor.desktop" "$rootfs/root/Desktop/calculator.desktop" "$rootfs/root/Desktop/sysinfo.desktop" \
+        "$rootfs/root/Desktop/store.desktop" \
+        "$rootfs/root/Desktop/settings.desktop" \
+        "$rootfs/root/Desktop/terminal.desktop" \
+        "$rootfs/root/Desktop/files.desktop" \
+        "$rootfs/root/Desktop/editor.desktop" \
+        "$rootfs/root/Desktop/calculator.desktop" \
+        "$rootfs/root/Desktop/sysinfo.desktop" \
         "$rootfs/root/Projects/hello.py" \
         "$rootfs/root/Projects/test-elf.sh" \
         "$rootfs/usr/local/bin/start-desktop.sh" \
         "$rootfs/usr/local/bin/sysinfo.sh" \
         "$rootfs/usr/local/bin/linux-health.sh" \
-        "$rootfs/usr/local/bin/run-elf.sh"
+        "$rootfs/usr/local/bin/run-elf.sh" \
+        "$rootfs/usr/local/bin/pocketlinux-store.py" \
+        "$rootfs/usr/local/bin/pocketlinux-settings.py"
 }
 
 build_rootfs_for_abi() {

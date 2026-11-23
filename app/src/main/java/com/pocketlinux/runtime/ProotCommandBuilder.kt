@@ -123,6 +123,12 @@ class ProotCommandBuilder(
             "-b", "${sharedDir.absolutePath}:/mnt/sdcard"
         )
 
+        val virglSocket = File(prootTmpDir, VirglServerManager.DEFAULT_SOCKET_NAME)
+        if (virglSocket.exists()) {
+            argv.add("-b")
+            argv.add("${virglSocket.absolutePath}:/tmp/.virgl_test")
+        }
+
         val phoneStorage = File("/storage/emulated/0")
         if (phoneStorage.isDirectory && phoneStorage.canRead()) {
             argv.add("-b")

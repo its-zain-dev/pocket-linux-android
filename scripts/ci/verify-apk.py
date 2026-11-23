@@ -55,6 +55,9 @@ REQUIRED_ROOTFS_FILES = (
     "usr/local/bin/sysinfo.sh",
     "usr/local/bin/linux-health.sh",
     "usr/local/bin/run-elf.sh",
+    "usr/local/bin/pocketlinux-store.py",
+    "usr/local/bin/pocketlinux-settings.py",
+    "etc/profile.d/pocketlinux-gpu.sh",
     "etc/resolv.conf",
 )
 
@@ -168,7 +171,7 @@ def main() -> None:
     parser.add_argument("--apk", required=True, help="Path to APK file")
     parser.add_argument("--abi", required=True, choices=sorted(ELF_MACHINES.keys()), help="Expected ABI")
     parser.add_argument("--min-size-mb", type=float, default=20.0, help="Minimum APK size in MiB")
-    parser.add_argument("--max-size-mb", type=float, default=140.0, help="Maximum APK size in MiB")
+    parser.add_argument("--max-size-mb", type=float, default=175.0, help="Maximum APK size in MiB")
     parser.add_argument("--apksigner", default=None, help="Explicit path to apksigner")
     parser.add_argument("--skip-apksigner", action="store_true", help="Skip apksigner verification")
     args = parser.parse_args()

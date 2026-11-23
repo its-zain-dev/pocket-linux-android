@@ -8,6 +8,12 @@ export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-/root/.config}"
 export XDG_DATA_HOME="${XDG_DATA_HOME:-/root/.local/share}"
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
+# Load GPU acceleration / software rendering profile before starting Xvnc/jwm/pcmanfm
+if [ -r /etc/profile.d/pocketlinux-gpu.sh ]; then
+    # shellcheck disable=SC1091
+    . /etc/profile.d/pocketlinux-gpu.sh
+fi
+
 GEOM="${GEOM:-1024x600}"
 RFB_PORT="${RFB_PORT:-5901}"
 READY_FILE="/tmp/.pocketlinux_desktop_ready"
@@ -40,7 +46,9 @@ Xvnc "$DISPLAY" \
     -localhost \
     -SecurityTypes None \
     -ac \
-    -AlwaysShared >/tmp/xvnc.log 2>&1 &
+    -AlwaysShared \
+    -ZlibLevel 1 \
+    -FrameRate 60 >/tmp/xvnc.log 2>&1 &
 XVNC_PID=$!
 
 # Wait for Xvnc display to accept connections (up to 10s)
@@ -64,18 +72,15 @@ if ! DISPLAY="$DISPLAY" xdpyinfo >/dev/null 2>&1; then
     exit 1
 fi
 
-# Start a local D-Bus session if dbus-launch is available (keeps PCManFM/GTK happy)
 if command -v dbus-launch >/dev/null 2>&1; then
     eval "$(dbus-launch --sh-syntax 2>/dev/null)" || true
     DBUS_PID="${DBUS_SESSION_BUS_PID:-}"
 fi
 
-# Load dark xterm resources
 if [ -f "$HOME/.Xresources" ] && command -v xrdb >/dev/null 2>&1; then
     DISPLAY="$DISPLAY" xrdb -merge "$HOME/.Xresources" 2>/dev/null || true
 fi
 
-# Apply wallpaper immediately before launching window manager
 if [ -f "$WALLPAPER" ] && command -v feh >/dev/null 2>&1; then
     DISPLAY="$DISPLAY" feh --no-fehbg --bg-scale "$WALLPAPER" 2>/dev/null || true
 else
@@ -85,13 +90,11 @@ fi
 DISPLAY="$DISPLAY" jwm >/tmp/jwm.log 2>&1 &
 JWM_PID=$!
 
-# Launch PCManFM desktop manager for clickable icons & wallpaper
 if command -v pcmanfm >/dev/null 2>&1; then
     DISPLAY="$DISPLAY" pcmanfm --desktop >/tmp/pcmanfm-desktop.log 2>&1 &
     PCMANFM_PID=$!
 fi
 
-# Wait for root window tree to settle (up to 5s)
 j=0
 while [ "$j" -lt 50 ]; do
     if DISPLAY="$DISPLAY" xwininfo -root >/dev/null 2>&1; then

@@ -39,6 +39,7 @@ class LinuxRuntimeService : Service(), LinuxRuntimeController {
     private val binder = LocalBinder()
     private val serviceMonitorScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private lateinit var engine: LinuxRuntimeEngine
+    private lateinit var virglServerManager: VirglServerManager
 
     val rfbClient: RfbClient = RfbClient()
     lateinit var terminalSession: TerminalSessionController
@@ -51,6 +52,8 @@ class LinuxRuntimeService : Service(), LinuxRuntimeController {
         super.onCreate()
         val rootfsManager = RootfsManager(this)
         val commandBuilder = ProotCommandBuilder(this)
+        virglServerManager = VirglServerManager(commandBuilder)
+        virglServerManager.start()
         createNotificationChannel()
         engine = LinuxRuntimeEngine(
             rootfsProvider = RootfsManagerAdapter(rootfsManager),
@@ -142,6 +145,9 @@ class LinuxRuntimeService : Service(), LinuxRuntimeController {
         runCatching { rfbClient.close() }
         if (::engine.isInitialized) {
             engine.destroy()
+        }
+        if (::virglServerManager.isInitialized) {
+            runCatching { virglServerManager.stop() }
         }
         runCatching {
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
