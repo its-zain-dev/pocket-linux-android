@@ -470,7 +470,7 @@ EOF
         "$rootfs/root/.config/pcmanfm/default/desktop-items-0.conf" \
         "$rootfs/root/Documents/Welcome-to-PocketLinux.txt"
     sudo chmod 0755 \
-        "$rootfs/root/Desktop/"*.desktop \
+        "$rootfs/root/Desktop/terminal.desktop" "$rootfs/root/Desktop/files.desktop" "$rootfs/root/Desktop/editor.desktop" "$rootfs/root/Desktop/calculator.desktop" "$rootfs/root/Desktop/sysinfo.desktop" \
         "$rootfs/root/Projects/hello.py" \
         "$rootfs/root/Projects/test-elf.sh" \
         "$rootfs/usr/local/bin/start-desktop.sh" \
