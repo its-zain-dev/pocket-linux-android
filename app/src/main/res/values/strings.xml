@@ -1,6 +1,43 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Core App & Foreground Service Notification -->
     <string name="app_name">PocketLinux</string>
     <string name="runtime_channel_name">Linux Runtime</string>
     <string name="runtime_channel_desc">Status for the local Linux environment and X11 display server</string>
+
+    <!-- Navigation Tabs -->
+    <string name="tab_desktop">Desktop</string>
+    <string name="tab_terminal">Terminal</string>
+    <string name="tab_apps_system">Apps &amp; System</string>
+
+    <!-- Runtime Lifecycle States -->
+    <string name="runtime_state_idle">Idle</string>
+    <string name="runtime_state_extracting">Extracting Alpine Linux rootfs…</string>
+    <string name="runtime_state_starting">Starting X11 desktop and JWM…</string>
+    <string name="runtime_state_ready">Linux runtime ready</string>
+    <string name="runtime_state_stopping">Stopping Linux runtime…</string>
+    <string name="runtime_state_error">Runtime error</string>
+
+    <!-- Desktop / RFB Controls -->
+    <string name="desktop_mode_tap">Mode: Tap</string>
+    <string name="desktop_mode_trackpad">Mode: Trackpad</string>
+    <string name="desktop_action_reconnect">Reconnect</string>
+    <string name="rfb_status_connecting">RFB Connecting to 127.0.0.1:5901…</string>
+    <string name="rfb_status_connected">RFB Connected: %1$dx%2$d (%3$s)</string>
+    <string name="rfb_status_disconnected">RFB Disconnected</string>
+    <string name="rfb_status_error">RFB Error: %1$s</string>
+
+    <!-- Built-in Terminal -->
+    <string name="terminal_input_hint">Enter command…</string>
+    <string name="terminal_action_send">Send</string>
+    <string name="terminal_banner_default">PocketLinux Interactive PTY (/bin/bash -l)\n/root # </string>
+
+    <!-- Apps & System Tab -->
+    <string name="apps_section_launchers">Desktop Applications</string>
+    <string name="apps_section_command">Run Linux Command</string>
+    <string name="apps_section_metrics">System Metrics</string>
+    <string name="apps_command_hint">Command (e.g. uname -a)</string>
+    <string name="apps_action_run">Run</string>
+    <string name="apps_action_refresh_metrics">Refresh Metrics</string>
+    <string name="apps_command_ready">Command output ready (exitCode=0)</string>
 </resources>

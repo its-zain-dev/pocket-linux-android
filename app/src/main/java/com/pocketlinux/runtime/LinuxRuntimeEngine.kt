@@ -45,6 +45,7 @@ internal class RootfsManagerAdapter(
 
 internal interface RuntimeCommandFactory {
     val rootfsDir: File
+    fun prepareEnvironment() {}
     fun buildShellExec(command: String, display: String): ProotCommand
     fun buildInteractiveShell(display: String): ProotCommand
     fun buildStartDesktop(geometry: String, rfbPort: Int, display: String): ProotCommand
@@ -57,6 +58,8 @@ internal class ProotCommandFactory(
 ) : RuntimeCommandFactory {
     override val rootfsDir: File
         get() = builder.rootfsDir
+
+    override fun prepareEnvironment() = builder.ensureRuntimeDirsAndFakeProc()
 
     override fun buildShellExec(command: String, display: String): ProotCommand =
         builder.buildShellExec(command = command, display = display)
@@ -172,6 +175,7 @@ internal class LinuxRuntimeEngine(
         var errDrainJob: Job? = null
         try {
             jobContext.ensureActive()
+            commandFactory.prepareEnvironment()
             val rootfsReadyMs = rootfsProvider.ensureExtracted { progressLabel ->
                 jobContext.ensureActive()
                 if (isCurrentGeneration(gen)) {
@@ -316,6 +320,7 @@ internal class LinuxRuntimeEngine(
         withContext(Dispatchers.IO) {
             rootfsProvider.ensureExtracted()
             coroutineContext.ensureActive()
+            commandFactory.prepareEnvironment()
             val cmd = commandFactory.buildShellExec(command = command, display = display)
             executeProcessBounded(cmd, timeoutMs)
         }
@@ -325,6 +330,7 @@ internal class LinuxRuntimeEngine(
             rootfsProvider.ensureExtracted()
             coroutineContext.ensureActive()
             val startNs = System.nanoTime()
+            commandFactory.prepareEnvironment()
             val cmd = commandFactory.buildLaunchGuiApp(command = command, display = display)
             val process = cmd.toProcessBuilder().start()
             val tracked = synchronized(lifecycleLock) {
@@ -408,6 +414,7 @@ internal class LinuxRuntimeEngine(
         withContext(Dispatchers.IO) {
             rootfsProvider.ensureExtracted()
             coroutineContext.ensureActive()
+            commandFactory.prepareEnvironment()
             val cmd = commandFactory.buildInteractiveShell(display = display)
             val rawSession = openPtySession(cmd, cols, rows)
             val tracked = TrackedPtySession(rawSession)
@@ -726,7 +733,7 @@ internal class LinuxRuntimeEngine(
         private const val DEFAULT_GUI_STARTUP_CHECK_MS = 250L
         private const val XWIN_CHECK_TIMEOUT_MS = 5_000L
         private const val SYSINFO_TIMEOUT_MS = 5_000L
-        private const val GRACEFUL_TERM_WAIT_MS = 200L
+        private const val GRACEFUL_TERM_WAIT_MS = 1_500L
         private const val FORCE_KILL_WAIT_MS = 500L
         private const val STREAM_DRAIN_GRACE_MS = 1_000L
         private const val MAX_LOG_TAIL_CHARS = 8192

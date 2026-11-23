@@ -4,11 +4,14 @@ set -eu
 export DISPLAY="${DISPLAY:-:1}"
 export HOME="${HOME:-/root}"
 export USER="${USER:-root}"
+export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-/root/.config}"
+export XDG_DATA_HOME="${XDG_DATA_HOME:-/root/.local/share}"
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 GEOM="${GEOM:-1024x600}"
 RFB_PORT="${RFB_PORT:-5901}"
 READY_FILE="/tmp/.pocketlinux_desktop_ready"
+WALLPAPER="/usr/share/backgrounds/pocketlinux-wallpaper.png"
 
 rm -f "$READY_FILE" "${READY_FILE}.tmp" /tmp/.X1-lock /tmp/.X11-unix/X1
 chmod 1777 /tmp 2>/dev/null || true
@@ -17,15 +20,16 @@ chmod 1777 /tmp/.X11-unix 2>/dev/null || true
 
 XVNC_PID=""
 JWM_PID=""
+PCMANFM_PID=""
+DBUS_PID=""
 
 cleanup() {
     rm -f "$READY_FILE" "${READY_FILE}.tmp"
-    if [ -n "$JWM_PID" ]; then
-        kill "$JWM_PID" 2>/dev/null || true
-    fi
-    if [ -n "$XVNC_PID" ]; then
-        kill "$XVNC_PID" 2>/dev/null || true
-    fi
+    for p in "$PCMANFM_PID" "$JWM_PID" "$DBUS_PID" "$XVNC_PID"; do
+        if [ -n "$p" ]; then
+            kill "$p" 2>/dev/null || true
+        fi
+    done
 }
 trap cleanup TERM INT EXIT
 
@@ -60,8 +64,32 @@ if ! DISPLAY="$DISPLAY" xdpyinfo >/dev/null 2>&1; then
     exit 1
 fi
 
+# Start a local D-Bus session if dbus-launch is available (keeps PCManFM/GTK happy)
+if command -v dbus-launch >/dev/null 2>&1; then
+    eval "$(dbus-launch --sh-syntax 2>/dev/null)" || true
+    DBUS_PID="${DBUS_SESSION_BUS_PID:-}"
+fi
+
+# Load dark xterm resources
+if [ -f "$HOME/.Xresources" ] && command -v xrdb >/dev/null 2>&1; then
+    DISPLAY="$DISPLAY" xrdb -merge "$HOME/.Xresources" 2>/dev/null || true
+fi
+
+# Apply wallpaper immediately before launching window manager
+if [ -f "$WALLPAPER" ] && command -v feh >/dev/null 2>&1; then
+    DISPLAY="$DISPLAY" feh --no-fehbg --bg-scale "$WALLPAPER" 2>/dev/null || true
+else
+    DISPLAY="$DISPLAY" xsetroot -solid "#0F172A" -cursor_name left_ptr 2>/dev/null || true
+fi
+
 DISPLAY="$DISPLAY" jwm >/tmp/jwm.log 2>&1 &
 JWM_PID=$!
+
+# Launch PCManFM desktop manager for clickable icons & wallpaper
+if command -v pcmanfm >/dev/null 2>&1; then
+    DISPLAY="$DISPLAY" pcmanfm --desktop >/tmp/pcmanfm-desktop.log 2>&1 &
+    PCMANFM_PID=$!
+fi
 
 # Wait for root window tree to settle (up to 5s)
 j=0

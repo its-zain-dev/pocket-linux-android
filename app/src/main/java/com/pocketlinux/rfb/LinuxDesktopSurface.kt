@@ -12,6 +12,7 @@ import android.view.SurfaceView
 import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
+import android.view.inputmethod.InputMethodManager
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -22,9 +23,11 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.pointer.PointerEventType
@@ -44,7 +47,10 @@ import java.util.concurrent.atomic.AtomicBoolean
 fun LinuxDesktopSurface(
     controller: RfbController,
     modifier: Modifier = Modifier,
-    touchInputMode: TouchInputMode = TouchInputMode.DIRECT_TAP
+    touchInputMode: TouchInputMode = TouchInputMode.DIRECT_TAP,
+    softKeyboardTrigger: Int = 0,
+    hideKeyboardTrigger: Int = 0,
+    autoResizeDesktop: Boolean = false
 ) {
     val currentController by rememberUpdatedState(controller)
     val currentMode by rememberUpdatedState(touchInputMode)
@@ -53,6 +59,7 @@ fun LinuxDesktopSurface(
 
     val surfaceHolderRef = remember { arrayOfNulls<DesktopSurfaceView>(1) }
     val viewSizeRef = remember { arrayOf(IntSize.Zero) }
+    var surfaceSize by remember { mutableStateOf(IntSize.Zero) }
 
     val touchController = remember(controller) {
         TouchInputController(
@@ -75,6 +82,34 @@ fun LinuxDesktopSurface(
         surfaceHolderRef[0]?.requestRender()
     }
 
+    LaunchedEffect(softKeyboardTrigger) {
+        if (softKeyboardTrigger > 0) {
+            surfaceHolderRef[0]?.showSoftKeyboard()
+        }
+    }
+
+    LaunchedEffect(hideKeyboardTrigger) {
+        if (hideKeyboardTrigger > 0) {
+            surfaceHolderRef[0]?.hideSoftKeyboard()
+        }
+    }
+
+    LaunchedEffect(autoResizeDesktop, surfaceSize, connectionState) {
+        if (!autoResizeDesktop) return@LaunchedEffect
+        if (connectionState !is RfbConnectionState.Connected) return@LaunchedEffect
+        if (surfaceSize.width <= 0 || surfaceSize.height <= 0) return@LaunchedEffect
+        delay(250L)
+        val target = computeAutoDesktopSize(
+            surfaceWidth = surfaceSize.width,
+            surfaceHeight = surfaceSize.height
+        ) ?: return@LaunchedEffect
+        if (target.width != currentController.desktopWidth ||
+            target.height != currentController.desktopHeight
+        ) {
+            currentController.requestDesktopSize(target.width, target.height)
+        }
+    }
+
     DisposableEffect(controller) {
         val removeListener = if (controller is RfbClient) {
             controller.addFrameListener {
@@ -93,7 +128,10 @@ fun LinuxDesktopSurface(
         modifier = modifier
             .testTag("desktop_surface")
             .focusable()
-            .onSizeChanged { viewSizeRef[0] = it }
+            .onSizeChanged { newSize ->
+                viewSizeRef[0] = newSize
+                surfaceSize = newSize
+            }
             .onPreviewKeyEvent { composeKeyEvent ->
                 val nativeEvent = composeKeyEvent.nativeKeyEvent
                 dispatchNativeKeyEvent(currentController, nativeEvent)
@@ -262,6 +300,9 @@ private class DesktopSurfaceView(
 
     private val renderLock = Any()
     private val renderScheduled = AtomicBoolean(false)
+    private val imeBridge = DesktopImeInputBridge { keySym, down ->
+        controllerProvider().sendKeyEvent(keySym, down)
+    }
     private val bitmapPaint = Paint().apply {
         isFilterBitmap = true
     }
@@ -287,45 +328,92 @@ private class DesktopSurfaceView(
         holder.addCallback(this)
     }
 
+    fun showSoftKeyboard() {
+        imeBridge.reset()
+        isFocusable = true
+        isFocusableInTouchMode = true
+        requestFocus()
+        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager ?: return
+        post {
+            requestFocus()
+            imm.restartInput(this)
+            val shown = imm.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
+            if (!shown) {
+                postDelayed({
+                    requestFocus()
+                    imm.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
+                }, 80L)
+            }
+        }
+    }
+
+    fun hideSoftKeyboard() {
+        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager ?: return
+        post {
+            imm.hideSoftInputFromWindow(windowToken, 0)
+        }
+    }
+
     override fun onCheckIsTextEditor(): Boolean = true
 
     override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
-        outAttrs.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+        outAttrs.inputType = InputType.TYPE_CLASS_TEXT or
+            InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD or
+            InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
         outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_ACTION_NONE
+        imeBridge.reset()
         return object : BaseInputConnection(this, false) {
+            override fun setComposingText(text: CharSequence?, newCursorPosition: Int): Boolean {
+                imeBridge.setComposingText(text)
+                return true
+            }
+
             override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
-                val str = text?.toString().orEmpty()
-                if (str.isNotEmpty()) {
-                    val controller = controllerProvider()
-                    for (ks in KeySymMapper.textToKeySymSequence(str)) {
-                        controller.sendKeyEvent(ks, true)
-                        controller.sendKeyEvent(ks, false)
-                    }
-                }
+                imeBridge.commitText(text)
+                return true
+            }
+
+            override fun finishComposingText(): Boolean {
+                imeBridge.finishComposingText()
                 return true
             }
 
             override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
-                val controller = controllerProvider()
-                repeat(beforeLength.coerceAtLeast(0)) {
-                    controller.sendKeyEvent(KeySymMapper.XK_BACKSPACE, true)
-                    controller.sendKeyEvent(KeySymMapper.XK_BACKSPACE, false)
-                }
-                repeat(afterLength.coerceAtLeast(0)) {
-                    controller.sendKeyEvent(KeySymMapper.XK_DELETE, true)
-                    controller.sendKeyEvent(KeySymMapper.XK_DELETE, false)
-                }
+                imeBridge.deleteSurroundingText(beforeLength, afterLength)
+                return true
+            }
+
+            override fun deleteSurroundingTextInCodePoints(
+                beforeLength: Int,
+                afterLength: Int
+            ): Boolean {
+                imeBridge.deleteSurroundingText(beforeLength, afterLength)
+                return true
+            }
+
+            override fun performEditorAction(editorAction: Int): Boolean {
+                imeBridge.performEditorAction(editorAction)
                 return true
             }
 
             override fun sendKeyEvent(event: KeyEvent): Boolean {
-                return dispatchNativeKeyEvent(controllerProvider(), event) || super.sendKeyEvent(event)
+                val handled = dispatchNativeKeyEvent(controllerProvider(), event)
+                if (handled) {
+                    imeBridge.onKeyEventHandled(event.keyCode, event.action == KeyEvent.ACTION_DOWN)
+                    return true
+                }
+                return super.sendKeyEvent(event)
             }
         }
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
-        return dispatchNativeKeyEvent(controllerProvider(), event) || super.onKeyDown(keyCode, event)
+        val handled = dispatchNativeKeyEvent(controllerProvider(), event)
+        if (handled) {
+            imeBridge.onKeyEventHandled(keyCode, true)
+            return true
+        }
+        return super.onKeyDown(keyCode, event)
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
@@ -408,7 +496,7 @@ private class DesktopSurfaceView(
             }
 
             try {
-                canvas.drawColor(0xFF0B1120.toInt())
+                canvas.drawColor(0xFF090D16.toInt())
                 if (frameBitmap != null && !frameBitmap.isRecycled) {
                     val vp = computeViewport(
                         viewWidth = canvas.width,

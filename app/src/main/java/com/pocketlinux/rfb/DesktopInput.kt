@@ -1,8 +1,10 @@
 package com.pocketlinux.rfb
 
+import android.view.KeyEvent
 import kotlin.math.abs
 import kotlin.math.floor
 import kotlin.math.hypot
+import kotlin.math.roundToInt
 
 data class DesktopViewport(
     val scale: Float,
@@ -16,6 +18,167 @@ data class DesktopPoint(
     val x: Int,
     val y: Int
 )
+
+data class DesktopSize(
+    val width: Int,
+    val height: Int
+)
+
+/**
+ * Computes clean even-numbered desktop dimensions matching [surfaceWidth] x [surfaceHeight]'s
+ * aspect ratio, clamped between [minWidth] x [minHeight] and [maxWidth] x [maxHeight].
+ */
+fun computeAutoDesktopSize(
+    surfaceWidth: Int,
+    surfaceHeight: Int,
+    minWidth: Int = 800,
+    minHeight: Int = 480,
+    maxWidth: Int = 1920,
+    maxHeight: Int = 1080
+): DesktopSize? {
+    if (surfaceWidth <= 0 || surfaceHeight <= 0) return null
+
+    var w = surfaceWidth.toFloat()
+    var h = surfaceHeight.toFloat()
+
+    if (w > maxWidth || h > maxHeight) {
+        val downScale = minOf(maxWidth / w, maxHeight / h)
+        w *= downScale
+        h *= downScale
+    }
+
+    if (w < minWidth || h < minHeight) {
+        val upScale = maxOf(minWidth / w, minHeight / h)
+        w *= upScale
+        h *= upScale
+    }
+
+    fun clampEven(value: Float, minVal: Int, maxVal: Int): Int {
+        val clamped = value.coerceIn(minVal.toFloat(), maxVal.toFloat())
+        val even = ((clamped / 2f).roundToInt() * 2)
+        return even.coerceIn(minVal, maxVal)
+    }
+
+    return DesktopSize(
+        width = clampEven(w, minWidth, maxWidth),
+        height = clampEven(h, minHeight, maxHeight)
+    )
+}
+
+/**
+ * Pure-JVM bridge translating Android IME InputConnection callbacks into RFB KeySym events.
+ * Handles direct commitText, Gboard/Samsung composing sessions (setComposingText /
+ * finishComposingText) without dropping or duplicating words, Enter/Return editor actions,
+ * and Backspace/Delete surrounding-text operations.
+ */
+class DesktopImeInputBridge(
+    private val sendKey: (keySym: Int, down: Boolean) -> Unit
+) {
+    private var composingCodePoints: IntArray = IntArray(0)
+
+    private fun tapKey(keySym: Int) {
+        sendKey(keySym, true)
+        sendKey(keySym, false)
+    }
+
+    private fun sendText(text: String) {
+        val normalized = text.replace("\r\n", "\n")
+        for (ks in KeySymMapper.textToKeySymSequence(normalized)) {
+            tapKey(ks)
+        }
+    }
+
+    private fun toCodePoints(text: String): IntArray {
+        if (text.isEmpty()) return IntArray(0)
+        val normalized = text.replace("\r\n", "\n")
+        val count = normalized.codePointCount(0, normalized.length)
+        val out = IntArray(count)
+        var offset = 0
+        var idx = 0
+        while (offset < normalized.length) {
+            val cp = normalized.codePointAt(offset)
+            out[idx++] = cp
+            offset += Character.charCount(cp)
+        }
+        return out
+    }
+
+    private fun replaceComposingWith(newText: String, keepAsComposing: Boolean) {
+        val next = toCodePoints(newText)
+        val minLen = minOf(composingCodePoints.size, next.size)
+        var commonPrefix = 0
+        while (commonPrefix < minLen && composingCodePoints[commonPrefix] == next[commonPrefix]) {
+            commonPrefix++
+        }
+        val toDelete = composingCodePoints.size - commonPrefix
+        repeat(toDelete) {
+            tapKey(KeySymMapper.XK_BACKSPACE)
+        }
+        for (i in commonPrefix until next.size) {
+            val ks = KeySymMapper.unicodeToKeySym(next[i])
+            if (ks != null) {
+                tapKey(ks)
+            }
+        }
+        composingCodePoints = if (keepAsComposing) next else IntArray(0)
+    }
+
+    fun setComposingText(text: CharSequence?) {
+        replaceComposingWith(text?.toString().orEmpty(), keepAsComposing = true)
+    }
+
+    fun commitText(text: CharSequence?) {
+        val str = text?.toString().orEmpty()
+        if (composingCodePoints.isNotEmpty()) {
+            replaceComposingWith(str, keepAsComposing = false)
+        } else if (str.isNotEmpty()) {
+            sendText(str)
+        }
+    }
+
+    fun finishComposingText() {
+        composingCodePoints = IntArray(0)
+    }
+
+    fun deleteSurroundingText(beforeLength: Int, afterLength: Int) {
+        val before = beforeLength.coerceAtLeast(0)
+        val after = afterLength.coerceAtLeast(0)
+        repeat(before) {
+            tapKey(KeySymMapper.XK_BACKSPACE)
+        }
+        if (before > 0 && composingCodePoints.isNotEmpty()) {
+            val remaining = (composingCodePoints.size - before).coerceAtLeast(0)
+            composingCodePoints = composingCodePoints.copyOf(remaining)
+        }
+        repeat(after) {
+            tapKey(KeySymMapper.XK_DELETE)
+        }
+    }
+
+    fun performEditorAction(actionCode: Int) {
+        composingCodePoints = IntArray(0)
+        tapKey(KeySymMapper.XK_RETURN)
+    }
+
+    fun onKeyEventHandled(keyCode: Int, isDown: Boolean) {
+        if (!isDown) return
+        when (keyCode) {
+            KeyEvent.KEYCODE_DEL -> {
+                if (composingCodePoints.isNotEmpty()) {
+                    composingCodePoints = composingCodePoints.copyOf(composingCodePoints.size - 1)
+                }
+            }
+            KeyEvent.KEYCODE_ENTER,
+            KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                composingCodePoints = IntArray(0)
+            }
+        }
+    }
+
+    fun reset() {
+        composingCodePoints = IntArray(0)
+    }
+}
 
 fun computeViewport(
     viewWidth: Int,

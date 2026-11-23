@@ -32,6 +32,55 @@ class ProotCommandBuilder(
     val rootfsDir: File = File(filesDir, "rootfs")
     val sharedDir: File = File(filesDir, "shared")
     val prootTmpDir: File = File(cacheDir, "proot_tmp")
+    val fakeProcDir: File = File(filesDir, "proot_fake_proc")
+
+    /**
+     * Ensures auxiliary runtime directories and SELinux-safe fake /proc files exist
+     * so tools like htop, ps, uptime, and ELF binaries work reliably on Android 8-15.
+     */
+    fun ensureRuntimeDirsAndFakeProc() {
+        runCatching {
+            if (!sharedDir.isDirectory) sharedDir.mkdirs()
+            if (!prootTmpDir.isDirectory) prootTmpDir.mkdirs()
+            if (!fakeProcDir.isDirectory) fakeProcDir.mkdirs()
+
+            writeIfMissing(
+                File(fakeProcDir, "loadavg"),
+                "0.12 0.08 0.05 1/128 1001\n"
+            )
+            writeIfMissing(
+                File(fakeProcDir, "stat"),
+                buildString {
+                    append("cpu  1000 0 500 50000 0 0 0 0 0 0\n")
+                    append("cpu0 1000 0 500 50000 0 0 0 0 0 0\n")
+                    append("intr 0\n")
+                    append("ctxt 1024\n")
+                    append("btime 1700000000\n")
+                    append("processes 64\n")
+                    append("procs_running 1\n")
+                    append("procs_blocked 0\n")
+                }
+            )
+            writeIfMissing(
+                File(fakeProcDir, "uptime"),
+                "3600.00 7200.00\n"
+            )
+            writeIfMissing(
+                File(fakeProcDir, "version"),
+                "Linux version 6.1.0-pocketlinux (gcc) #1 SMP PREEMPT\n"
+            )
+            writeIfMissing(
+                File(fakeProcDir, "vmstat"),
+                "nr_free_pages 65536\npgpgin 1024\npgpgout 512\n"
+            )
+        }
+    }
+
+    private fun writeIfMissing(file: File, content: String) {
+        if (!file.isFile || file.length() == 0L) {
+            file.writeText(content)
+        }
+    }
 
     fun buildEnvironment(
         display: String? = ":1",
@@ -43,6 +92,8 @@ class ProotCommandBuilder(
             "PROOT_NO_SECCOMP" to "1",
             "HOME" to "/root",
             "USER" to "root",
+            "XDG_CONFIG_HOME" to "/root/.config",
+            "XDG_DATA_HOME" to "/root/.local/share",
             "TERM" to "xterm-256color",
             "LANG" to "C.UTF-8",
             "TMPDIR" to "/tmp",
@@ -62,20 +113,40 @@ class ProotCommandBuilder(
         extraEnv: Map<String, String> = emptyMap()
     ): ProotCommand {
         require(guestArgs.isNotEmpty()) { "guestArgs must not be empty" }
-        val argv = listOf(
+        val argv = mutableListOf(
             prootExecutable.absolutePath,
             "-0",
             "-r", rootfsDir.absolutePath,
             "-b", "/dev",
             "-b", "/proc",
             "-b", "/sys",
-            "-b", "${sharedDir.absolutePath}:/mnt/sdcard",
-            "--link2symlink",
-            "--sysvipc",
-            "--ashmem-memfd",
-            "--kill-on-exit",
-            "-w", workingDir
-        ) + guestArgs
+            "-b", "${sharedDir.absolutePath}:/mnt/sdcard"
+        )
+
+        val phoneStorage = File("/storage/emulated/0")
+        if (phoneStorage.isDirectory && phoneStorage.canRead()) {
+            argv.add("-b")
+            argv.add("${phoneStorage.absolutePath}:/mnt/phone")
+        }
+
+        for (name in FAKE_PROC_FILES) {
+            val fakeFile = File(fakeProcDir, name)
+            if (fakeFile.isFile) {
+                argv.add("-b")
+                argv.add("${fakeFile.absolutePath}:/proc/$name")
+            }
+        }
+
+        argv.addAll(
+            listOf(
+                "--link2symlink",
+                "--sysvipc",
+                "--ashmem-memfd",
+                "--kill-on-exit",
+                "-w", workingDir
+            )
+        )
+        argv.addAll(guestArgs)
 
         return ProotCommand(
             argv = argv,
@@ -136,12 +207,15 @@ class ProotCommandBuilder(
     ): ProotCommand {
         val trimmed = command.trim()
         val effectiveShellCommand = when (trimmed) {
-            "xterm" -> "exec xterm -geometry 100x28+120+60"
-            "feh" -> "if [ ! -s /tmp/pocketlinux_sample.ppm ]; then " +
+            "xterm" -> "exec xterm -fa 'DejaVu Sans Mono' -fs 12 -bg '#0F172A' -fg '#E2E8F0' -geometry 92x26+60+40"
+            "pcmanfm" -> "exec pcmanfm /root"
+            "feh" -> "if [ -s /usr/share/backgrounds/pocketlinux-wallpaper.png ]; then " +
+                "exec feh --title 'feh - PocketLinux' /usr/share/backgrounds/pocketlinux-wallpaper.png; " +
+                "else " +
                 "printf 'P6\\n240 160\\n255\\n' > /tmp/pocketlinux_sample.ppm; " +
                 "python3 -c 'open(\"/tmp/pocketlinux_sample.ppm\",\"ab\").write(b\"\\x38\\xbd\\xf8\"*(240*160))' 2>/dev/null || " +
                 "dd if=/dev/zero bs=115200 count=1 >> /tmp/pocketlinux_sample.ppm 2>/dev/null || true; " +
-                "fi; exec feh --title 'feh - PocketLinux' /tmp/pocketlinux_sample.ppm"
+                "exec feh --title 'feh - PocketLinux' /tmp/pocketlinux_sample.ppm; fi"
             else -> "exec $command"
         }
         return buildCommand(
@@ -166,5 +240,9 @@ class ProotCommandBuilder(
             workingDir = "/root",
             display = display
         )
+    }
+
+    companion object {
+        private val FAKE_PROC_FILES = listOf("stat", "uptime", "version", "loadavg", "vmstat")
     }
 }

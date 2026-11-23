@@ -6,20 +6,38 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.ButtonDefaults
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -29,15 +47,20 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -46,19 +69,33 @@ import com.pocketlinux.runtime.LinuxRuntimeService
 import com.pocketlinux.runtime.RuntimeState
 import com.pocketlinux.runtime.SystemMetrics
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
     private val fallbackRfbClient by lazy { RfbClient() }
 
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { _ ->
+        // Runtime service continues regardless of notification permission outcome.
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+        )
         requestNotificationPermissionIfNeeded()
         ensureRuntimeServiceStarted()
 
         setContent {
             PocketLinuxTheme {
-                PocketLinuxMainScreen(fallbackRfbClient = fallbackRfbClient)
+                PocketLinuxMainScreen(
+                    fallbackRfbClient = fallbackRfbClient,
+                    onRestartRuntime = { ensureRuntimeServiceStarted() }
+                )
             }
         }
     }
@@ -69,14 +106,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestNotificationPermissionIfNeeded() {
-        if (Build.VERSION.SDK_INT >= 33) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             runCatching {
-                if (ContextCompat.checkSelfPermission(
-                        this,
-                        Manifest.permission.POST_NOTIFICATIONS
-                    ) != PackageManager.PERMISSION_GRANTED
-                ) {
-                    requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1001)
+                val granted = ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) == PackageManager.PERMISSION_GRANTED
+                if (!granted) {
+                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                 }
             }
         }
@@ -101,10 +138,14 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
-private fun PocketLinuxMainScreen(fallbackRfbClient: RfbClient) {
+private fun PocketLinuxMainScreen(
+    fallbackRfbClient: RfbClient,
+    onRestartRuntime: () -> Unit
+) {
     val service by LinuxRuntimeService.serviceInstance.collectAsState()
     val sharedRfb by LinuxRuntimeService.sharedRfbClient.collectAsState()
     val sharedTerminal by LinuxRuntimeService.sharedTerminalSession.collectAsState()
+    val scope = rememberCoroutineScope()
 
     val runtimeState by (service?.state?.collectAsState()
         ?: remember { mutableStateOf<RuntimeState>(RuntimeState.Booting) })
@@ -135,8 +176,19 @@ private fun PocketLinuxMainScreen(fallbackRfbClient: RfbClient) {
         return latestMetrics
     }
 
+    val launchAppAndSwitchToDesktop: (String) -> Unit = { command ->
+        selectedTab = 0
+        val currentService = service
+        if (currentService != null) {
+            scope.launch {
+                runCatching { currentService.launchGuiApp(command) }
+                refreshMetricsNow()
+            }
+        }
+    }
+
     LaunchedEffect(service, runtimeState) {
-        val currentService = service ?: return@LaunchedEffect
+        if (service == null) return@LaunchedEffect
         refreshMetricsNow()
         if (runtimeState is RuntimeState.Ready) {
             while (true) {
@@ -150,15 +202,21 @@ private fun PocketLinuxMainScreen(fallbackRfbClient: RfbClient) {
         modifier = Modifier
             .fillMaxSize()
             .semantics { testTagsAsResourceId = true },
-        color = MaterialTheme.colorScheme.background
+        color = PocketLinuxColors.Obsidian
     ) {
-        Column(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding()
+        ) {
             TopTelemetryBar(
                 runtimeState = runtimeState,
-                latestMetrics = latestMetrics
+                latestMetrics = latestMetrics,
+                onRestartRuntime = onRestartRuntime
             )
 
-            TabNavigationBar(
+            SegmentedTabNavigationBar(
                 selectedTab = selectedTab,
                 onSelectTab = { selectedTab = it }
             )
@@ -170,16 +228,23 @@ private fun PocketLinuxMainScreen(fallbackRfbClient: RfbClient) {
             ) {
                 when (selectedTab) {
                     0 -> DesktopTab(
-                        rfbController = sharedRfb ?: fallbackRfbClient
+                        rfbController = sharedRfb ?: fallbackRfbClient,
+                        runtimeState = runtimeState,
+                        onLaunchApp = launchAppAndSwitchToDesktop,
+                        onOpenAppsTab = { selectedTab = 2 },
+                        onRestartRuntime = onRestartRuntime
                     )
                     1 -> TerminalTab(
-                        terminalSession = sharedTerminal
+                        terminalSession = sharedTerminal,
+                        runtimeState = runtimeState
                     )
                     else -> AppsSystemTab(
                         runtimeController = service,
                         runtimeState = runtimeState,
                         latestMetrics = latestMetrics,
-                        onRefreshMetrics = { refreshMetricsNow() }
+                        onRefreshMetrics = { refreshMetricsNow() },
+                        onLaunchAppAndSwitchToDesktop = launchAppAndSwitchToDesktop,
+                        onSwitchToDesktop = { selectedTab = 0 }
                     )
                 }
             }
@@ -190,15 +255,42 @@ private fun PocketLinuxMainScreen(fallbackRfbClient: RfbClient) {
 @Composable
 private fun TopTelemetryBar(
     runtimeState: RuntimeState,
-    latestMetrics: SystemMetrics?
+    latestMetrics: SystemMetrics?,
+    onRestartRuntime: () -> Unit
 ) {
     val statusText = when (runtimeState) {
         is RuntimeState.Idle -> "Linux: Idle"
         is RuntimeState.Extracting -> "Linux: Extracting"
         is RuntimeState.Booting -> "Linux: Booting"
         is RuntimeState.Ready -> "Linux: Ready"
-        is RuntimeState.Error -> "Linux: Error (${runtimeState.message.take(24)})"
+        is RuntimeState.Error -> "Linux: Error"
     }
+
+    val statusColor = when (runtimeState) {
+        is RuntimeState.Ready -> PocketLinuxColors.Emerald
+        is RuntimeState.Error -> PocketLinuxColors.Rose
+        is RuntimeState.Idle -> PocketLinuxColors.TextSecondary
+        else -> PocketLinuxColors.Amber
+    }
+
+    val statusBg = when (runtimeState) {
+        is RuntimeState.Ready -> PocketLinuxColors.EmeraldContainer.copy(alpha = 0.55f)
+        is RuntimeState.Error -> PocketLinuxColors.RoseContainer.copy(alpha = 0.7f)
+        is RuntimeState.Idle -> PocketLinuxColors.SurfaceElevated
+        else -> PocketLinuxColors.AmberContainer.copy(alpha = 0.65f)
+    }
+
+    val isAnimated = runtimeState is RuntimeState.Booting || runtimeState is RuntimeState.Extracting
+    val pulseTransition = rememberInfiniteTransition(label = "status_pulse")
+    val pulseAlpha by pulseTransition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 850),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "status_dot_alpha"
+    )
 
     val startupMs = when (runtimeState) {
         is RuntimeState.Ready -> runtimeState.startupDurationMs.coerceAtLeast(1L)
@@ -208,85 +300,189 @@ private fun TopTelemetryBar(
     val pssKb = (latestMetrics?.androidPssKb ?: 24576).coerceAtLeast(1)
     val pssMb = (pssKb / 1024).coerceAtLeast(1)
 
-    val statusColor = when (runtimeState) {
-        is RuntimeState.Ready -> Color(0xFF34D399)
-        is RuntimeState.Error -> Color(0xFFF87171)
-        else -> Color(0xFF38BDF8)
-    }
-
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(Color(0xFF0F172A))
-            .padding(horizontal = 10.dp, vertical = 6.dp),
+            .background(PocketLinuxColors.Obsidian)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(
-            text = statusText,
-            color = statusColor,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.testTag("linux_status_badge")
-        )
+        Surface(
+            color = statusBg,
+            shape = RoundedCornerShape(999.dp),
+            border = BorderStroke(1.dp, statusColor.copy(alpha = 0.45f))
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(7.dp)
+                        .alpha(if (isAnimated) pulseAlpha else 1f)
+                        .clip(CircleShape)
+                        .background(statusColor)
+                )
+                Text(
+                    text = statusText,
+                    color = statusColor,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.testTag("linux_status_badge")
+                )
+            }
+        }
 
-        Text(
-            text = "${startupMs} ms",
-            color = Color(0xFFE2E8F0),
-            fontSize = 12.sp,
-            modifier = Modifier.testTag("startup_time_badge")
-        )
-
-        Text(
-            text = "${pssMb} MB",
-            color = Color(0xFF22D3EE),
-            fontSize = 12.sp,
-            modifier = Modifier.testTag("memory_usage_badge")
-        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            TelemetryPill(
+                text = "${startupMs} ms",
+                accent = PocketLinuxColors.TextPrimary,
+                tag = "startup_time_badge"
+            )
+            TelemetryPill(
+                text = "${pssMb} MB",
+                accent = PocketLinuxColors.Cyan,
+                tag = "memory_usage_badge"
+            )
+            if (runtimeState is RuntimeState.Error || runtimeState is RuntimeState.Idle) {
+                Surface(
+                    color = PocketLinuxColors.CyanContainer,
+                    shape = CircleShape,
+                    border = BorderStroke(1.dp, PocketLinuxColors.Cyan.copy(alpha = 0.5f)),
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .clickable(onClick = onRestartRuntime)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Rounded.Refresh,
+                            contentDescription = "Restart Linux runtime",
+                            tint = PocketLinuxColors.Cyan,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
 @Composable
-private fun TabNavigationBar(
+private fun TelemetryPill(
+    text: String,
+    accent: Color,
+    tag: String
+) {
+    Surface(
+        color = PocketLinuxColors.Surface,
+        shape = RoundedCornerShape(999.dp),
+        border = BorderStroke(1.dp, PocketLinuxColors.Border)
+    ) {
+        Text(
+            text = text,
+            color = accent,
+            fontSize = 11.sp,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            modifier = Modifier
+                .padding(horizontal = 9.dp, vertical = 4.dp)
+                .testTag(tag)
+        )
+    }
+}
+
+private data class NavTabSpec(
+    val index: Int,
+    val tag: String,
+    val glyph: String,
+    val title: String
+)
+
+@Composable
+private fun SegmentedTabNavigationBar(
     selectedTab: Int,
     onSelectTab: (Int) -> Unit
 ) {
-    val tabs = listOf(
-        Triple(0, "tab_desktop", "Desktop"),
-        Triple(1, "tab_terminal", "Terminal"),
-        Triple(2, "tab_apps", "Apps & System")
-    )
+    val tabs = remember {
+        listOf(
+            NavTabSpec(0, "tab_desktop", "▣", "Desktop"),
+            NavTabSpec(1, "tab_terminal", ">_", "Terminal"),
+            NavTabSpec(2, "tab_apps", "⊞", "Apps & System")
+        )
+    }
 
-    Row(
+    Surface(
+        color = PocketLinuxColors.Surface,
+        shape = RoundedCornerShape(14.dp),
+        border = BorderStroke(1.dp, PocketLinuxColors.BorderSubtle),
         modifier = Modifier
             .fillMaxWidth()
-            .background(Color(0xFF1E293B))
-            .padding(horizontal = 8.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
+            .padding(horizontal = 12.dp, vertical = 2.dp)
     ) {
-        tabs.forEach { (idx, tag, title) ->
-            val selected = selectedTab == idx
-            OutlinedButton(
-                onClick = { onSelectTab(idx) },
-                modifier = Modifier
-                    .weight(1f)
-                    .height(34.dp)
-                    .testTag(tag),
-                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
-                colors = ButtonDefaults.outlinedButtonColors(
-                    containerColor = if (selected) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.surface
-                    },
-                    contentColor = if (selected) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            tabs.forEach { tab ->
+                val selected = selectedTab == tab.index
+                val bgColor by animateColorAsState(
+                    targetValue = if (selected) PocketLinuxColors.Cyan else Color.Transparent,
+                    label = "tab_bg_${tab.index}"
+                )
+                val fgColor by animateColorAsState(
+                    targetValue = if (selected) {
                         MaterialTheme.colorScheme.onPrimary
                     } else {
-                        MaterialTheme.colorScheme.onSurface
-                    }
+                        PocketLinuxColors.TextSecondary
+                    },
+                    label = "tab_fg_${tab.index}"
                 )
-            ) {
-                Text(text = title, fontSize = 12.sp, maxLines = 1)
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(36.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(bgColor)
+                        .clickable { onSelectTab(tab.index) }
+                        .testTag(tab.tag),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center,
+                        modifier = Modifier.padding(horizontal = 6.dp)
+                    ) {
+                        Text(
+                            text = tab.glyph,
+                            color = fgColor,
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Text(
+                            text = tab.title,
+                            color = fgColor,
+                            fontSize = 12.sp,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
             }
         }
     }

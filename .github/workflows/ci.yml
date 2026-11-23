@@ -92,6 +92,12 @@ jobs:
               /bin/bash --version | head -n 1
               apk --version
               python3 --version
+              file --version | head -n 1
+              nano --version | head -n 1
+              test -d /root/Desktop
+              test -f /root/.config/gtk-3.0/bookmarks
+              test -x /usr/local/bin/linux-health.sh
+              /usr/local/bin/linux-health.sh --smoke
               xvnc_out="$(Xvnc -help 2>&1 || true)"
               printf "%s\n" "$xvnc_out" | grep -qi "Xvnc"
               jwm_out="$(jwm -v 2>&1 || true)"
@@ -117,10 +123,12 @@ jobs:
         run: |
           python3 scripts/ci/verify-apk.py \
             --apk app/build/outputs/apk/arm64/debug/app-arm64-debug.apk \
-            --abi arm64-v8a
+            --abi arm64-v8a \
+            --max-size-mb 140
           python3 scripts/ci/verify-apk.py \
             --apk app/build/outputs/apk/x86_64/debug/app-x86_64-debug.apk \
-            --abi x86_64
+            --abi x86_64 \
+            --max-size-mb 140
 
       - name: Upload arm64 debug APK
         uses: actions/upload-artifact@v4

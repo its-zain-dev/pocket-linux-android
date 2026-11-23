@@ -1,23 +1,41 @@
 <?xml version="1.0"?>
 <JWM>
+    <!-- Categorized Start Menu (accessible from dock button or desktop right-click) -->
     <RootMenu onroot="12">
-        <Program label="Terminal (xterm)" icon="utilities-terminal">xterm -fa "DejaVu Sans Mono" -fs 11</Program>
-        <Program label="Text Editor (Mousepad)" icon="accessories-text-editor">mousepad</Program>
-        <Program label="File Manager (PCManFM)" icon="system-file-manager">pcmanfm</Program>
-        <Program label="Calculator (Galculator)" icon="accessories-calculator">galculator</Program>
-        <Program label="Calculator (xcalc)" icon="accessories-calculator">xcalc</Program>
-        <Program label="Clock (xclock)" icon="appointment-soon">xclock</Program>
-        <Program label="Image Viewer (feh)" icon="image-x-generic">feh</Program>
+        <Program label="Terminal" icon="utilities-terminal">xterm -fa "DejaVu Sans Mono" -fs 12 -bg "#0F172A" -fg "#E2E8F0"</Program>
+        <Program label="File Manager" icon="system-file-manager">pcmanfm /root</Program>
+        <Separator/>
+        <Menu label="Accessories" icon="applications-accessories">
+            <Program label="Text Editor (Mousepad)" icon="accessories-text-editor">mousepad</Program>
+            <Program label="Terminal Editor (nano)" icon="accessories-text-editor">xterm -T "nano" -fa "DejaVu Sans Mono" -fs 12 -bg "#0F172A" -fg "#E2E8F0" -e nano</Program>
+            <Program label="Calculator (Galculator)" icon="accessories-calculator">galculator</Program>
+            <Program label="Calculator (xcalc)" icon="accessories-calculator">xcalc</Program>
+            <Program label="Clock (xclock)" icon="appointment-soon">xclock</Program>
+        </Menu>
+        <Menu label="Graphics" icon="applications-graphics">
+            <Program label="Image Viewer (feh)" icon="image-x-generic">feh /usr/share/backgrounds/pocketlinux-wallpaper.png</Program>
+        </Menu>
+        <Menu label="System" icon="applications-system">
+            <Program label="System Health &amp; ELF Check" icon="utilities-system-monitor">xterm -T "PocketLinux Health Check" -fa "DejaVu Sans Mono" -fs 11 -bg "#0F172A" -fg "#E2E8F0" -hold -e /usr/local/bin/linux-health.sh</Program>
+            <Program label="Process Monitor (htop)" icon="utilities-system-monitor">xterm -T "htop" -fa "DejaVu Sans Mono" -fs 11 -bg "#0F172A" -fg "#E2E8F0" -e htop</Program>
+            <Program label="System Info (sysinfo)" icon="dialog-information">xterm -T "System Info" -fa "DejaVu Sans Mono" -fs 11 -bg "#0F172A" -fg "#E2E8F0" -hold -e /usr/local/bin/sysinfo.sh --text</Program>
+        </Menu>
         <Separator/>
         <Restart label="Restart JWM" icon="view-refresh"/>
-        <Exit label="Exit" confirm="false" icon="application-exit"/>
+        <Exit label="Exit Desktop" confirm="false" icon="application-exit"/>
     </RootMenu>
 
-    <Tray x="0" y="-1" height="32" autohide="off" halign="fixed" valign="bottom">
-        <TrayButton label="Apps">root:1</TrayButton>
-        <TrayButton label="Term">exec:xterm -fa "DejaVu Sans Mono" -fs 11</TrayButton>
+    <!-- Touch-friendly 42px bottom taskbar / dock -->
+    <Tray x="0" y="-1" height="42" autohide="off" halign="fixed" valign="bottom">
+        <TrayButton label=" Apps " icon="start-here">root:1</TrayButton>
+        <Spacer width="4"/>
+        <TrayButton label=" Term " icon="utilities-terminal">exec:xterm -fa "DejaVu Sans Mono" -fs 12 -bg "#0F172A" -fg "#E2E8F0"</TrayButton>
+        <TrayButton label=" Files " icon="system-file-manager">exec:pcmanfm /root</TrayButton>
+        <TrayButton label=" Edit " icon="accessories-text-editor">exec:mousepad</TrayButton>
+        <TrayButton label=" Calc " icon="accessories-calculator">exec:galculator</TrayButton>
+        <Spacer width="6"/>
         <Pager labeled="true"/>
-        <TaskList maxwidth="200"/>
+        <TaskList maxwidth="220"/>
         <Dock/>
         <Clock format="%H:%M"/>
     </Tray>
@@ -25,28 +43,28 @@
     <WindowStyle>
         <Font>DejaVu Sans-10:bold</Font>
         <Width>4</Width>
-        <Height>24</Height>
-        <Corner>4</Corner>
-        <Foreground>#E2E8F0</Foreground>
+        <Height>28</Height>
+        <Corner>6</Corner>
+        <Foreground>#CBD5E1</Foreground>
         <Background>#1E293B</Background>
         <Outline>#334155</Outline>
         <Opacity>1.0</Opacity>
         <Active>
             <Foreground>#FFFFFF</Foreground>
-            <Background>#0284C7</Background>
+            <Background>#0EA5E9</Background>
             <Outline>#38BDF8</Outline>
             <Opacity>1.0</Opacity>
         </Active>
     </WindowStyle>
 
     <TrayStyle group="true" list="all">
-        <Font>DejaVu Sans-10</Font>
+        <Font>DejaVu Sans-10:bold</Font>
         <Background>#0F172A</Background>
-        <Foreground>#E2E8F0</Foreground>
-        <Outline>#334155</Outline>
+        <Foreground>#F1F5F9</Foreground>
+        <Outline>#1E293B</Outline>
         <Active>
             <Foreground>#FFFFFF</Foreground>
-            <Background>#0369A1</Background>
+            <Background>#0284C7</Background>
         </Active>
     </TrayStyle>
 
@@ -54,7 +72,7 @@
         <Font>DejaVu Sans-10</Font>
         <Active>
             <Foreground>#FFFFFF</Foreground>
-            <Background>#0284C7</Background>
+            <Background>#0EA5E9</Background>
         </Active>
         <Foreground>#CBD5E1</Foreground>
         <Background>#1E293B</Background>
@@ -66,36 +84,36 @@
         <Background>#0F172A</Background>
         <Text>#E2E8F0</Text>
         <Active>
-            <Foreground>#0284C7</Foreground>
+            <Foreground>#0EA5E9</Foreground>
             <Background>#1E293B</Background>
         </Active>
     </PagerStyle>
 
     <MenuStyle>
-        <Font>DejaVu Sans-10</Font>
-        <Foreground>#E2E8F0</Foreground>
+        <Font>DejaVu Sans-11</Font>
+        <Foreground>#F1F5F9</Foreground>
         <Background>#0F172A</Background>
         <Outline>#334155</Outline>
         <Active>
             <Foreground>#FFFFFF</Foreground>
-            <Background>#0284C7</Background>
+            <Background>#0EA5E9</Background>
         </Active>
     </MenuStyle>
 
     <ClockStyle>
-        <Font>DejaVu Sans-10:bold</Font>
+        <Font>DejaVu Sans-11:bold</Font>
         <Foreground>#38BDF8</Foreground>
         <Background>#0F172A</Background>
     </ClockStyle>
 
     <Desktops width="2" height="1">
-        <Background type="solid">#1E293B</Background>
+        <Background type="solid">#0F172A</Background>
     </Desktops>
 
-    <StartupCommand>xsetroot -solid "#1E293B" -cursor_name left_ptr</StartupCommand>
+    <StartupCommand>xsetroot -cursor_name left_ptr</StartupCommand>
 
     <DoubleClickSpeed>400</DoubleClickSpeed>
-    <DoubleClickDelta>2</DoubleClickDelta>
+    <DoubleClickDelta>4</DoubleClickDelta>
     <FocusModel>click</FocusModel>
     <SnapMode distance="10">border</SnapMode>
     <MoveMode>opaque</MoveMode>

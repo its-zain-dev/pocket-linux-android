@@ -44,15 +44,29 @@ REQUIRED_ROOTFS_FILES = (
     "usr/bin/xdpyinfo",
     "usr/bin/xrandr",
     "usr/bin/xsetroot",
+    "usr/bin/file",
     "root/.jwmrc",
+    "root/.config/gtk-3.0/bookmarks",
+    "root/.config/gtk-3.0/settings.ini",
+    "root/Desktop/terminal.desktop",
+    "root/Desktop/files.desktop",
+    "usr/share/backgrounds/pocketlinux-wallpaper.png",
     "usr/local/bin/start-desktop.sh",
     "usr/local/bin/sysinfo.sh",
+    "usr/local/bin/linux-health.sh",
+    "usr/local/bin/run-elf.sh",
     "etc/resolv.conf",
+)
+
+REQUIRED_ROOTFS_ANY_OF = (
+    ("lib/libgcompat.so.0", "usr/lib/libgcompat.so.0"),
 )
 
 REQUIRED_EXECUTABLE_ROOTFS = (
     "usr/local/bin/start-desktop.sh",
     "usr/local/bin/sysinfo.sh",
+    "usr/local/bin/linux-health.sh",
+    "usr/local/bin/run-elf.sh",
 )
 
 
@@ -106,6 +120,9 @@ def verify_rootfs_tar_gz(fileobj: io.BufferedReader, abi: str) -> None:
                     resolv_content = extracted.read().decode("utf-8", errors="replace")
 
     missing = [p for p in REQUIRED_ROOTFS_FILES if p not in seen]
+    for group in REQUIRED_ROOTFS_ANY_OF:
+        if not any(candidate in seen for candidate in group):
+            missing.append(" or ".join(group))
     if missing:
         fail(f"rootfs-{abi}.tar.gz missing required entries: {missing}")
     if symlink_count == 0:
@@ -121,7 +138,7 @@ def verify_rootfs_tar_gz(fileobj: io.BufferedReader, abi: str) -> None:
 
     print(
         f"[verify-apk] OK rootfs-{abi}.tar.gz: {len(seen)} entries, "
-        f"{symlink_count} symlinks, all {len(REQUIRED_ROOTFS_FILES)} required files present."
+        f"{symlink_count} symlinks, all {len(REQUIRED_ROOTFS_FILES) + len(REQUIRED_ROOTFS_ANY_OF)} required checks passed."
     )
 
 
@@ -151,7 +168,7 @@ def main() -> None:
     parser.add_argument("--apk", required=True, help="Path to APK file")
     parser.add_argument("--abi", required=True, choices=sorted(ELF_MACHINES.keys()), help="Expected ABI")
     parser.add_argument("--min-size-mb", type=float, default=20.0, help="Minimum APK size in MiB")
-    parser.add_argument("--max-size-mb", type=float, default=120.0, help="Maximum APK size in MiB")
+    parser.add_argument("--max-size-mb", type=float, default=140.0, help="Maximum APK size in MiB")
     parser.add_argument("--apksigner", default=None, help="Explicit path to apksigner")
     parser.add_argument("--skip-apksigner", action="store_true", help="Skip apksigner verification")
     args = parser.parse_args()

@@ -37,6 +37,18 @@ PACKAGES=(
     dbus
     dbus-x11
     ca-certificates
+    # ELF / glibc compatibility & Linux power tools
+    # gcompat provides libc6-compat + glibc dynamic loader on Alpine v3.20
+    gcompat
+    patchelf
+    file
+    nano
+    htop
+    # Desktop MIME, launcher & typography polish
+    xdg-utils
+    desktop-file-utils
+    shared-mime-info
+    font-noto
 )
 
 SKIP_EXISTING=false
@@ -104,6 +116,79 @@ if [[ " ${REQUESTED_ABIS[*]} " == *" arm64-v8a "* ]]; then
     fi
 fi
 
+# Generate crisp dark-gradient PNG wallpaper once via Python stdlib (zero external deps)
+WALLPAPER_PNG="$WORK_DIR/pocketlinux-wallpaper.png"
+python3 - "$WALLPAPER_PNG" <<'PYEOF'
+import math
+import struct
+import sys
+import zlib
+
+out_path = sys.argv[1]
+W, H = 1280, 720
+
+
+def png_chunk(tag: bytes, data: bytes) -> bytes:
+    return (
+        struct.pack(">I", len(data))
+        + tag
+        + data
+        + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+    )
+
+
+rows = bytearray()
+cx1, cy1 = W * 0.72, H * 0.28
+inv_r1 = 1.0 / (520.0 * 520.0)
+cx2, cy2 = W * 0.20, H * 0.82
+inv_r2 = 1.0 / (480.0 * 480.0)
+
+for y in range(H):
+    rows.append(0)
+    ty = y / (H - 1)
+    dy1 = (y - cy1) * (y - cy1)
+    dy2 = (y - cy2) * (y - cy2)
+    grid_y = (y % 64 == 0)
+
+    br = 11.0 + 19.0 * ty
+    bg = 17.0 + 24.0 * ty
+    bb = 32.0 + 27.0 * ty
+
+    row = bytearray(W * 3)
+    idx = 0
+    for x in range(W):
+        d1 = (x - cx1) * (x - cx1) + dy1
+        g1 = math.exp(-d1 * inv_r1) if d1 < 900000 else 0.0
+        d2 = (x - cx2) * (x - cx2) + dy2
+        g2 = math.exp(-d2 * inv_r2) if d2 < 800000 else 0.0
+
+        r = br + 14.0 * g1 * 0.35 + 60.0 * g2 * 0.22
+        g = bg + 165.0 * g1 * 0.28 + 65.0 * g2 * 0.16
+        b = bb + 233.0 * g1 * 0.34 + 190.0 * g2 * 0.26
+
+        if grid_y or (x % 64 == 0):
+            r += 5.0
+            g += 8.0
+            b += 12.0
+
+        row[idx] = 255 if r > 255 else int(r)
+        row[idx + 1] = 255 if g > 255 else int(g)
+        row[idx + 2] = 255 if b > 255 else int(b)
+        idx += 3
+    rows.extend(row)
+
+ihdr = struct.pack(">IIBBBBB", W, H, 8, 2, 0, 0, 0)
+idat = zlib.compress(bytes(rows), level=6)
+png_bytes = (
+    b"\x89PNG\r\n\x1a\n"
+    + png_chunk(b"IHDR", ihdr)
+    + png_chunk(b"IDAT", idat)
+    + png_chunk(b"IEND", b"")
+)
+with open(out_path, "wb") as f:
+    f.write(png_bytes)
+PYEOF
+
 # Fetch host (x86_64) apk-tools-static from Alpine v3.20 main
 APKINDEX_HOST="$WORK_DIR/downloads/APKINDEX-x86_64.tar.gz"
 curl -fsSL --retry 3 --retry-delay 2 "${ALPINE_MIRROR}/main/x86_64/APKINDEX.tar.gz" -o "$APKINDEX_HOST"
@@ -118,6 +203,281 @@ curl -fsSL --retry 3 --retry-delay 2 "${ALPINE_MIRROR}/main/x86_64/${APK_STATIC_
 tar -ixzf "$WORK_DIR/downloads/${APK_STATIC_PKG}" -C "$WORK_DIR/apk-tools" sbin/apk.static
 APK_STATIC="$WORK_DIR/apk-tools/sbin/apk.static"
 chmod +x "$APK_STATIC"
+
+install_desktop_and_home() {
+    local rootfs="$1"
+
+    sudo mkdir -p \
+        "$rootfs/mnt/sdcard" \
+        "$rootfs/mnt/phone" \
+        "$rootfs/usr/share/backgrounds" \
+        "$rootfs/root/Desktop" \
+        "$rootfs/root/Documents" \
+        "$rootfs/root/Downloads" \
+        "$rootfs/root/Projects" \
+        "$rootfs/root/.config/gtk-3.0" \
+        "$rootfs/root/.config/libfm" \
+        "$rootfs/root/.config/pcmanfm/default" \
+        "$rootfs/usr/local/bin"
+
+    sudo cp "$WALLPAPER_PNG" "$rootfs/usr/share/backgrounds/pocketlinux-wallpaper.png"
+    sudo chmod 0644 "$rootfs/usr/share/backgrounds/pocketlinux-wallpaper.png"
+
+    sudo ln -sfn /mnt/sdcard "$rootfs/root/SharedStorage"
+    sudo ln -sfn /mnt/phone "$rootfs/root/PhoneStorage"
+
+    cat <<'EOF' | sudo tee "$rootfs/root/.config/user-dirs.dirs" >/dev/null
+XDG_DESKTOP_DIR="$HOME/Desktop"
+XDG_DOCUMENTS_DIR="$HOME/Documents"
+XDG_DOWNLOAD_DIR="$HOME/Downloads"
+EOF
+
+    cat <<'EOF' | sudo tee "$rootfs/root/.config/gtk-3.0/settings.ini" >/dev/null
+[Settings]
+gtk-application-prefer-dark-theme=1
+gtk-theme-name=Adwaita
+gtk-icon-theme-name=Adwaita
+gtk-font-name=DejaVu Sans 10
+gtk-cursor-theme-name=Adwaita
+gtk-toolbar-style=GTK_TOOLBAR_ICONS
+EOF
+
+    cat <<'EOF' | sudo tee "$rootfs/root/.config/gtk-3.0/bookmarks" >/dev/null
+file:///root Home
+file:///root/Desktop Desktop
+file:///root/Documents Documents
+file:///root/Downloads Downloads
+file:///root/Projects Projects
+file:///mnt/sdcard Shared Storage
+file:///mnt/phone Phone Storage
+file:/// Root Filesystem
+EOF
+
+    cat <<'EOF' | sudo tee "$rootfs/root/.config/libfm/libfm.conf" >/dev/null
+[config]
+single_click=0
+use_trash=0
+confirm_del=1
+confirm_trash=0
+quick_exec=1
+terminal=xterm -fa "DejaVu Sans Mono" -fs 12 -bg "#0F172A" -fg "#E2E8F0" -e %s
+thumbnail_local=1
+thumbnail_max=2048
+
+[ui]
+big_icon_size=48
+small_icon_size=24
+pane_icon_size=24
+thumbnail_size=128
+show_thumbnail=1
+shadow_hidden=1
+EOF
+
+    cat <<'EOF' | sudo tee "$rootfs/root/.config/pcmanfm/default/pcmanfm.conf" >/dev/null
+[config]
+bm_open_method=0
+
+[volume]
+mount_on_startup=0
+mount_removable=0
+autorun=0
+
+[ui]
+always_show_tabs=0
+max_tab_chars=32
+win_width=860
+win_height=520
+splitter_pos=190
+media_in_new_tab=0
+desktop_folder_new_win=0
+change_tab_on_drop=1
+close_on_unmount=1
+focus_previous=0
+side_pane_mode=places
+view_mode=icon
+show_hidden=0
+sort=name;ascending;
+toolbar=newtab;navigation;home;
+show_statusbar=1
+pathbar_mode_buttons=1
+EOF
+
+    cat <<'EOF' | sudo tee "$rootfs/root/.config/pcmanfm/default/desktop-items-0.conf" >/dev/null
+[*]
+wallpaper_mode=stretch
+wallpaper_common=1
+wallpaper=/usr/share/backgrounds/pocketlinux-wallpaper.png
+desktop_bg=#0f172a
+desktop_fg=#f8fafc
+desktop_shadow=#020617
+desktop_font=DejaVu Sans 10
+show_wm_menu=1
+sort=mtime;ascending;
+show_documents=0
+show_trash=0
+show_mounts=0
+EOF
+
+    cat <<'EOF' | sudo tee "$rootfs/root/.Xresources" >/dev/null
+XTerm*faceName: DejaVu Sans Mono
+XTerm*faceSize: 12
+XTerm*background: #0F172A
+XTerm*foreground: #E2E8F0
+XTerm*cursorColor: #38BDF8
+XTerm*scrollBar: false
+XTerm*saveLines: 4096
+XTerm*selectToClipboard: true
+EOF
+
+    cat <<'EOF' | sudo tee "$rootfs/root/Desktop/terminal.desktop" >/dev/null
+[Desktop Entry]
+Type=Application
+Name=Terminal
+Comment=Open PocketLinux Shell
+Exec=xterm -fa "DejaVu Sans Mono" -fs 12 -bg "#0F172A" -fg "#E2E8F0"
+Icon=utilities-terminal
+Terminal=false
+Categories=System;TerminalEmulator;
+EOF
+
+    cat <<'EOF' | sudo tee "$rootfs/root/Desktop/files.desktop" >/dev/null
+[Desktop Entry]
+Type=Application
+Name=File Manager
+Comment=Browse Linux & Phone Storage
+Exec=pcmanfm /root
+Icon=system-file-manager
+Terminal=false
+Categories=System;FileManager;
+EOF
+
+    cat <<'EOF' | sudo tee "$rootfs/root/Desktop/editor.desktop" >/dev/null
+[Desktop Entry]
+Type=Application
+Name=Text Editor
+Comment=Edit code and text files
+Exec=mousepad
+Icon=accessories-text-editor
+Terminal=false
+Categories=Utility;TextEditor;
+EOF
+
+    cat <<'EOF' | sudo tee "$rootfs/root/Desktop/calculator.desktop" >/dev/null
+[Desktop Entry]
+Type=Application
+Name=Calculator
+Comment=Scientific & Basic Calculator
+Exec=galculator
+Icon=accessories-calculator
+Terminal=false
+Categories=Utility;Calculator;
+EOF
+
+    cat <<'EOF' | sudo tee "$rootfs/root/Desktop/sysinfo.desktop" >/dev/null
+[Desktop Entry]
+Type=Application
+Name=System Info
+Comment=Run PocketLinux Health & ELF Self-Check
+Exec=xterm -T "PocketLinux Health Check" -fa "DejaVu Sans Mono" -fs 11 -bg "#0F172A" -fg "#E2E8F0" -hold -e /usr/local/bin/linux-health.sh
+Icon=utilities-system-monitor
+Terminal=false
+Categories=System;Monitor;
+EOF
+
+    cat <<'EOF' | sudo tee "$rootfs/root/Documents/Welcome-to-PocketLinux.txt" >/dev/null
+============================================================
+                 Welcome to PocketLinux!
+============================================================
+
+You are running a full Alpine Linux desktop inside Android.
+
+Quick Folder Guide
+------------------
+- /root/Desktop         Desktop app shortcuts
+- /root/Documents       Notes and guides (including this file)
+- /root/Downloads       Downloaded files
+- /root/Projects        Sample Python & ELF test scripts
+- /root/SharedStorage   Linked to Android app shared storage (/mnt/sdcard)
+- /root/PhoneStorage    Linked to phone storage (/mnt/phone)
+
+Running Linux & ELF Binaries
+----------------------------
+PocketLinux includes gcompat (glibc compatibility layer), file,
+and patchelf so both musl and standard glibc Linux ELF binaries
+can be inspected and executed:
+
+  linux-health.sh                 Run full system & ELF self-check
+  run-elf.sh --info /bin/busybox  Inspect ELF headers & libraries
+  run-elf.sh ./my-linux-binary    Execute a Linux ELF binary
+
+Installing More Packages
+------------------------
+  apk update
+  apk add git vim gcc musl-dev    # Install extra dev tools anytime
+EOF
+
+    cat <<'EOF' | sudo tee "$rootfs/root/Projects/hello.py" >/dev/null
+#!/usr/bin/env python3
+"""Quick PocketLinux Python 3 verification script."""
+
+import os
+import platform
+
+
+def main() -> None:
+    uname = os.uname()
+    print("Hello from PocketLinux!")
+    print(f"Python:   {platform.python_version()}")
+    print(f"System:   {uname.sysname} {uname.release} ({uname.machine})")
+    print(f"Workdir:  {os.getcwd()}")
+
+
+if __name__ == "__main__":
+    main()
+EOF
+
+    cat <<'EOF' | sudo tee "$rootfs/root/Projects/test-elf.sh" >/dev/null
+#!/bin/sh
+set -eu
+
+echo "=== PocketLinux ELF & gcompat Quick Test ==="
+echo "Architecture: $(uname -m)"
+echo ""
+echo "[1] Inspecting /bin/busybox:"
+/usr/local/bin/run-elf.sh --info /bin/busybox
+echo ""
+echo "[2] Executing /bin/busybox via run-elf.sh:"
+/usr/local/bin/run-elf.sh /bin/busybox uname -a
+echo ""
+echo "ELF execution test succeeded."
+EOF
+
+    sudo cp "$OVERLAY_DIR/root/.jwmrc" "$rootfs/root/.jwmrc"
+    sudo cp "$OVERLAY_DIR/usr/local/bin/start-desktop.sh" "$rootfs/usr/local/bin/start-desktop.sh"
+    sudo cp "$OVERLAY_DIR/usr/local/bin/sysinfo.sh" "$rootfs/usr/local/bin/sysinfo.sh"
+    sudo cp "$OVERLAY_DIR/usr/local/bin/linux-health.sh" "$rootfs/usr/local/bin/linux-health.sh"
+    sudo cp "$OVERLAY_DIR/usr/local/bin/run-elf.sh" "$rootfs/usr/local/bin/run-elf.sh"
+
+    sudo chown -R 0:0 "$rootfs/root" "$rootfs/usr/local" "$rootfs/usr/share/backgrounds"
+    sudo chmod 0644 \
+        "$rootfs/root/.jwmrc" \
+        "$rootfs/root/.Xresources" \
+        "$rootfs/root/.config/user-dirs.dirs" \
+        "$rootfs/root/.config/gtk-3.0/settings.ini" \
+        "$rootfs/root/.config/gtk-3.0/bookmarks" \
+        "$rootfs/root/.config/libfm/libfm.conf" \
+        "$rootfs/root/.config/pcmanfm/default/pcmanfm.conf" \
+        "$rootfs/root/.config/pcmanfm/default/desktop-items-0.conf" \
+        "$rootfs/root/Documents/Welcome-to-PocketLinux.txt"
+    sudo chmod 0755 \
+        "$rootfs/root/Desktop/"*.desktop \
+        "$rootfs/root/Projects/hello.py" \
+        "$rootfs/root/Projects/test-elf.sh" \
+        "$rootfs/usr/local/bin/start-desktop.sh" \
+        "$rootfs/usr/local/bin/sysinfo.sh" \
+        "$rootfs/usr/local/bin/linux-health.sh" \
+        "$rootfs/usr/local/bin/run-elf.sh"
+}
 
 build_rootfs_for_abi() {
     local abi="$1"
@@ -155,7 +515,7 @@ build_rootfs_for_abi() {
     minirootfs_info="$(python3 - "$releases_yaml" "$alpine_arch" <<'PYEOF'
 import sys
 yaml_path, arch = sys.argv[1], sys.argv[2]
-prefix = f"alpine-minirootfs-3.20."
+prefix = "alpine-minirootfs-3.20."
 suffix = f"-{arch}.tar.gz"
 cur_file = None
 cur_sha = None
@@ -198,14 +558,12 @@ PYEOF
     sudo tar -xzf "$mini_tar" -C "$rootfs"
 
     if [[ "$alpine_arch" == "aarch64" ]]; then
-        # Copy qemu binary into rootfs only if binfmt_misc lacks the F (fix-binary) flag
         if ! grep -qsE 'flags:.*F' /proc/sys/fs/binfmt_misc/qemu-aarch64 2>/dev/null; then
             sudo cp "$QEMU_AARCH64_BIN" "$rootfs${QEMU_AARCH64_BIN}"
             sudo chmod 0755 "$rootfs${QEMU_AARCH64_BIN}"
         fi
     fi
 
-    # Provide temporary DNS for apk/chroot if needed
     sudo cp /etc/resolv.conf "$rootfs/etc/resolv.conf" 2>/dev/null || true
 
     sudo mount -t proc proc "$rootfs/proc"
@@ -218,28 +576,19 @@ PYEOF
         --no-cache \
         add "${PACKAGES[@]}"
 
-    sudo chroot "$rootfs" /bin/sh -c "fc-cache -f || true"
+    sudo chroot "$rootfs" /bin/sh -c "fc-cache -f || true; update-desktop-database /usr/share/applications 2>/dev/null || true; update-mime-database /usr/share/mime 2>/dev/null || true"
 
     unmount_rootfs "$rootfs"
 
-    # Replace host resolv.conf with clean public DNS defaults
     printf 'nameserver 8.8.8.8\nnameserver 1.1.1.1\n' | sudo tee "$rootfs/etc/resolv.conf" >/dev/null
     sudo chmod 0644 "$rootfs/etc/resolv.conf"
 
-    # Strip emulator helper and apk caches; ensure tmp permissions
     sudo rm -f "$rootfs/usr/bin/qemu-aarch64-static" "$rootfs/usr/bin/qemu-aarch64"
     sudo rm -rf "$rootfs/var/cache/apk/"*
     sudo mkdir -p "$rootfs/tmp/.X11-unix"
     sudo chmod 1777 "$rootfs/tmp" "$rootfs/tmp/.X11-unix"
 
-    # Install PocketLinux rootfs overlay files
-    sudo mkdir -p "$rootfs/root" "$rootfs/usr/local/bin"
-    sudo cp "$OVERLAY_DIR/root/.jwmrc" "$rootfs/root/.jwmrc"
-    sudo cp "$OVERLAY_DIR/usr/local/bin/start-desktop.sh" "$rootfs/usr/local/bin/start-desktop.sh"
-    sudo cp "$OVERLAY_DIR/usr/local/bin/sysinfo.sh" "$rootfs/usr/local/bin/sysinfo.sh"
-    sudo chown -R 0:0 "$rootfs/root" "$rootfs/usr/local"
-    sudo chmod 0644 "$rootfs/root/.jwmrc"
-    sudo chmod 0755 "$rootfs/usr/local/bin/start-desktop.sh" "$rootfs/usr/local/bin/sysinfo.sh"
+    install_desktop_and_home "$rootfs"
 
     local tmp_out="${out_tar}.tmp"
     sudo tar --numeric-owner -czf "$tmp_out" -C "$rootfs" .
