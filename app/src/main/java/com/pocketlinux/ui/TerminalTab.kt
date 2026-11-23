@@ -36,6 +36,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -64,6 +66,7 @@ fun TerminalTab(
     val focusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
     val scrollState = rememberScrollState()
+    val scope = rememberCoroutineScope()
 
     val rawOutput by (terminalSession?.outputText?.collectAsState()
         ?: remember { mutableStateOf("") })
@@ -160,7 +163,7 @@ fun TerminalTab(
                 }
                 TerminalHeaderChip(label = "Restart") {
                     terminalSession?.closeCurrentSession()
-                    terminalSession?.ensureSessionOpen()
+                    scope.launch { terminalSession?.ensureSessionOpen() }
                 }
             }
         }
