@@ -8,6 +8,11 @@ export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-/root/.config}"
 export XDG_DATA_HOME="${XDG_DATA_HOME:-/root/.local/share}"
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
+# Ensure Alpine DNS resolves even if Android Private DNS / ISP blocks UDP 53
+if [ -x /usr/local/bin/fix-dns.sh ]; then
+    /usr/local/bin/fix-dns.sh >/dev/null 2>&1 &
+fi
+
 # Load GPU acceleration / software rendering profile before starting Xvnc/jwm/pcmanfm
 if [ -r /etc/profile.d/pocketlinux-gpu.sh ]; then
     # shellcheck disable=SC1091

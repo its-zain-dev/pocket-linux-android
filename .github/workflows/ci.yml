@@ -59,7 +59,7 @@ jobs:
           path: |
             app/src/arm64/assets/rootfs-arm64-v8a.tar.gz
             app/src/x86_64/assets/rootfs-x86_64.tar.gz
-          key: ${{ runner.os }}-rootfs-v3.20-v2-${{ hashFiles('scripts/ci/build-rootfs.sh', 'scripts/ci/rootfs-overlay/**') }}
+          key: ${{ runner.os }}-rootfs-v3.20-slim-${{ hashFiles('scripts/ci/build-rootfs.sh', 'scripts/ci/rootfs-overlay/**') }}
 
       - name: Build Alpine v3.20 rootfs tarballs (aarch64 & x86_64)
         run: bash scripts/ci/build-rootfs.sh --skip-existing

@@ -51,10 +51,8 @@ PACKAGES=(
     font-noto
     # PocketStore & PocketLinux Settings (GTK-3 Python) + VirGL/Mesa GPU
     py3-gobject3
-    mesa-dri-gallium
     mesa-egl
     mesa-gles
-    mesa-demos
 )
 
 SKIP_EXISTING=false
@@ -488,6 +486,7 @@ EOF
     sudo cp "$OVERLAY_DIR/usr/local/bin/sysinfo.sh" "$rootfs/usr/local/bin/sysinfo.sh"
     sudo cp "$OVERLAY_DIR/usr/local/bin/linux-health.sh" "$rootfs/usr/local/bin/linux-health.sh"
     sudo cp "$OVERLAY_DIR/usr/local/bin/run-elf.sh" "$rootfs/usr/local/bin/run-elf.sh"
+    sudo cp "$OVERLAY_DIR/usr/local/bin/fix-dns.sh" "$rootfs/usr/local/bin/fix-dns.sh"
     sudo cp "$OVERLAY_DIR/usr/local/bin/pocketlinux-store.py" "$rootfs/usr/local/bin/pocketlinux-store.py"
     sudo cp "$OVERLAY_DIR/usr/local/bin/pocketlinux-settings.py" "$rootfs/usr/local/bin/pocketlinux-settings.py"
     sudo cp "$OVERLAY_DIR/etc/profile.d/pocketlinux-gpu.sh" "$rootfs/etc/profile.d/pocketlinux-gpu.sh"
@@ -519,7 +518,8 @@ EOF
         "$rootfs/usr/local/bin/linux-health.sh" \
         "$rootfs/usr/local/bin/run-elf.sh" \
         "$rootfs/usr/local/bin/pocketlinux-store.py" \
-        "$rootfs/usr/local/bin/pocketlinux-settings.py"
+        "$rootfs/usr/local/bin/pocketlinux-settings.py" \
+        "$rootfs/usr/local/bin/fix-dns.sh"
 }
 
 build_rootfs_for_abi() {

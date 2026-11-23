@@ -567,7 +567,7 @@ class PocketStoreWindow(Gtk.Window):
     def _install_packages(self, packages: list, display_name: str) -> None:
         quoted = " ".join(shlex.quote(p) for p in packages)
         # Auto-update index + upgrade shared libs + fix any missing dependencies automatically
-        cmd = f"apk update && apk add --upgrade {quoted} && apk fix"
+        cmd = f"/usr/local/bin/fix-dns.sh 2>/dev/null || true; apk update && apk add --upgrade {quoted} && apk fix"
         self.last_apk_update = time.time()
         self._run_apk_pipeline(f"Installing {display_name}", cmd)
 
@@ -578,7 +578,7 @@ class PocketStoreWindow(Gtk.Window):
 
     def _run_repair_all(self) -> None:
         self.last_apk_update = time.time()
-        self._run_apk_pipeline("Updating & Repairing All Libraries", "apk update && apk upgrade && apk fix")
+        self._run_apk_pipeline("Updating & Repairing All Libraries", "/usr/local/bin/fix-dns.sh 2>/dev/null || true; apk update && apk upgrade && apk fix")
 
     def _launch_command(self, cmd: str, name: str) -> None:
         self.status_label.set_text(f"Launching {name}...")

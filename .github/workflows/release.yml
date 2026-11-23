@@ -1,0 +1,134 @@
+name: PocketLinux Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag name (e.g. v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Publish PocketLinux APKs
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Resolve release tag
+        id: meta
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
+            TAG="${{ inputs.tag }}"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Install CI system dependencies
+        run: |
+          sudo apt-get update
+          if apt-cache policy qemu-user-static 2>/dev/null | grep -qE 'Candidate: [0-9]'; then
+            QEMU_PKGS="qemu-user-static binfmt-support"
+          else
+            QEMU_PKGS="qemu-user qemu-user-binfmt"
+          fi
+          sudo apt-get install -y --no-install-recommends \
+            gawk binutils make python3 curl tar unzip gzip meson ninja-build pkg-config $QEMU_PKGS
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Cache NDK PRoot & VirGL binaries
+        uses: actions/cache@v4
+        with:
+          path: app/src/main/jniLibs
+          key: ${{ runner.os }}-proot-virgl-v2-${{ hashFiles('scripts/ci/build-proot.sh', 'scripts/ci/build-virgl.sh') }}
+
+      - name: Build PRoot & unbundled loader (arm64-v8a & x86_64)
+        run: bash scripts/ci/build-proot.sh --skip-existing
+
+      - name: Build VirGL GPU server (optional)
+        continue-on-error: true
+        run: bash scripts/ci/build-virgl.sh --skip-existing
+
+      - name: Cache Alpine v3.20 rootfs tarballs
+        uses: actions/cache@v4
+        with:
+          path: |
+            app/src/arm64/assets/rootfs-arm64-v8a.tar.gz
+            app/src/x86_64/assets/rootfs-x86_64.tar.gz
+          key: ${{ runner.os }}-rootfs-v3.20-slim-${{ hashFiles('scripts/ci/build-rootfs.sh', 'scripts/ci/rootfs-overlay/**') }}
+
+      - name: Build Alpine v3.20 rootfs tarballs (aarch64 & x86_64)
+        run: bash scripts/ci/build-rootfs.sh --skip-existing
+
+      - name: Run unit tests and assemble multi-ABI APKs
+        run: |
+          ./gradlew --no-daemon \
+            testArm64DebugUnitTest \
+            testX86_64DebugUnitTest \
+            assembleArm64Debug \
+            assembleX86_64Debug
+
+      - name: Verify arm64 and x86_64 APKs
+        run: |
+          python3 scripts/ci/verify-apk.py \
+            --apk app/build/outputs/apk/arm64/debug/app-arm64-debug.apk \
+            --abi arm64-v8a \
+            --max-size-mb 140
+          python3 scripts/ci/verify-apk.py \
+            --apk app/build/outputs/apk/x86_64/debug/app-x86_64-debug.apk \
+            --abi x86_64 \
+            --max-size-mb 140
+
+      - name: Stage release assets and checksums
+        run: |
+          mkdir -p release-dist
+          TAG="${{ steps.meta.outputs.tag }}"
+          cp app/build/outputs/apk/arm64/debug/app-arm64-debug.apk "release-dist/PocketLinux-${TAG}-arm64-v8a.apk"
+          cp app/build/outputs/apk/x86_64/debug/app-x86_64-debug.apk "release-dist/PocketLinux-${TAG}-x86_64.apk"
+          (cd release-dist && sha256sum *.apk > SHA256SUMS.txt)
+          ls -lh release-dist
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: PocketLinux ${{ steps.meta.outputs.tag }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          body: |
+            ## PocketLinux ${{ steps.meta.outputs.tag }}
+
+            Self-contained, rootless **Alpine Linux 3.20** fullscreen desktop and terminal environment for Android — no root, no Termux, and no external VNC app required.
+
+            ### Highlights
+            - **Immersive Fullscreen X11 Desktop** (`Xvnc` + `JWM` + `PCManFM` desktop icons & dark wallpaper) with a minimal floating menu pill.
+            - **Smart Auto-Keyboard Control Bar**: Automatically reveals `Esc`, `Tab`, `Ctrl`, `Alt`, `Super`, arrow keys, and `Tap/Trackpad` toggle above the Android keyboard when typing.
+            - **Built-in PocketStore (GTK-3 App Store)**: Browse popular Linux apps (`Geany`, `GIMP`, `NetSurf`, `AbiWord`, `Gnumeric`, `Node.js`, `GCC`), live-search Alpine repos, and auto-resolve dependencies (`apk update && apk add --upgrade && apk fix`).
+            - **Built-in Settings & GPU Control Center**: Configure VirGL/LLVMpipe/Zink, test OpenGL (`glxgears`), switch resolutions (`xrandr`), clear cache, and run 1-click library repair.
+            - **Full ELF & Linux Support**: Native `aarch64`/`x86_64` musl & static ELF execution + `gcompat` glibc compatibility + SELinux-safe `/proc` + automatic DNS-over-HTTPS fallback.
+
+            ### Downloads
+            - **Phones & Tablets (64-bit ARM)**: `PocketLinux-${{ steps.meta.outputs.tag }}-arm64-v8a.apk`
+            - **x86_64 Emulators / Chromebooks**: `PocketLinux-${{ steps.meta.outputs.tag }}-x86_64.apk`
+          files: |
+            release-dist/PocketLinux-*-arm64-v8a.apk
+            release-dist/PocketLinux-*-x86_64.apk
+            release-dist/SHA256SUMS.txt

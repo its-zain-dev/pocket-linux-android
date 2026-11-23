@@ -6,8 +6,15 @@
         <receiver
             android:name="com.pocketlinux.automation.AutomationReceiver"
             android:exported="true"
-            tools:ignore="ExportedReceiver"
-            tools:replace="android:exported" />
+            tools:ignore="ExportedReceiver">
+            <intent-filter>
+                <action android:name="com.pocketlinux.ACTION_GET_STATUS" />
+                <action android:name="com.pocketlinux.ACTION_EXEC_LINUX" />
+                <action android:name="com.pocketlinux.ACTION_LAUNCH_GUI" />
+                <action android:name="com.pocketlinux.ACTION_VERIFY_DESKTOP_FRAME" />
+                <action android:name="com.pocketlinux.ACTION_START_RUNTIME" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>
