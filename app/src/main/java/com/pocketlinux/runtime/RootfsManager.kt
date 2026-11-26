@@ -54,7 +54,8 @@ class RootfsManager(
     private val availableAssets: Set<String>,
     private val openAsset: (String) -> InputStream,
     private val supportedAbis: List<String>,
-    private val posixOps: PosixOps
+    private val posixOps: PosixOps,
+    private val rootfsSchemaVersion: Int = 0
 ) {
     constructor(context: Context) : this(
         filesDir = context.filesDir,
@@ -62,7 +63,8 @@ class RootfsManager(
         availableAssets = context.assets.list("")?.toSet() ?: emptySet(),
         openAsset = { name -> context.assets.open(name) },
         supportedAbis = Build.SUPPORTED_ABIS.toList(),
-        posixOps = AndroidPosixOps()
+        posixOps = AndroidPosixOps(),
+        rootfsSchemaVersion = CURRENT_ROOTFS_SCHEMA_VERSION
     )
 
     val rootfsDir: File = File(filesDir, "rootfs")
@@ -70,6 +72,7 @@ class RootfsManager(
     val markerFile: File = File(rootfsDir, READY_MARKER_NAME)
     val sharedDir: File = File(filesDir, "shared")
     val prootTmpDir: File = File(cacheDir, "proot_tmp")
+    private val schemaMarkerFile: File = File(filesDir, ".pocketlinux_rootfs_schema_v$rootfsSchemaVersion")
 
     private val extractLock = Any()
 
@@ -87,7 +90,10 @@ class RootfsManager(
 
     fun isReady(): Boolean {
         val busybox = File(rootfsDir, "bin/busybox")
-        return markerFile.isFile && (busybox.exists() || posixOps.isSymbolicLink(busybox))
+        val baseReady = markerFile.isFile && (busybox.exists() || posixOps.isSymbolicLink(busybox))
+        if (!baseReady) return false
+        if (rootfsSchemaVersion > 0 && !schemaMarkerFile.isFile) return false
+        return true
     }
 
     fun ensureExtracted(onProgress: (String) -> Unit = {}): Long {
@@ -101,6 +107,9 @@ class RootfsManager(
             val startNs = System.nanoTime()
             val assetName = resolveAssetName()
             onProgress("Preparing Linux rootfs...")
+
+            val userBackupDir = File(cacheDir, "rootfs_user_backup")
+            val hadUserBackup = backupUserHomeDirs(userBackupDir)
 
             deleteRecursivelyNoFollow(stagingDir)
             deleteRecursivelyNoFollow(rootfsDir)
@@ -240,12 +249,49 @@ class RootfsManager(
                     throw IOException("Failed to commit staged rootfs from $stagingDir to $rootfsDir")
                 }
 
+                if (hadUserBackup) {
+                    restoreUserHomeDirs(userBackupDir)
+                }
+                if (rootfsSchemaVersion > 0) {
+                    runCatching { schemaMarkerFile.writeText("v$rootfsSchemaVersion\n") }
+                }
+
                 onProgress("Rootfs ready")
                 return ((System.nanoTime() - startNs) / 1_000_000L).coerceAtLeast(1L)
             } catch (t: Throwable) {
                 deleteRecursivelyNoFollow(stagingDir)
                 throw t
             }
+        }
+    }
+
+    private fun backupUserHomeDirs(backupRoot: File): Boolean {
+        if (rootfsSchemaVersion <= 0 || !rootfsDir.isDirectory) return false
+        return runCatching {
+            deleteRecursivelyNoFollow(backupRoot)
+            var copiedAny = false
+            for (sub in listOf("Documents", "Downloads", "Projects")) {
+                val src = File(rootfsDir, "root/$sub")
+                if (src.isDirectory && !posixOps.isSymbolicLink(src)) {
+                    val dst = File(backupRoot, sub)
+                    src.copyRecursively(dst, overwrite = true)
+                    copiedAny = true
+                }
+            }
+            copiedAny
+        }.getOrDefault(false)
+    }
+
+    private fun restoreUserHomeDirs(backupRoot: File) {
+        runCatching {
+            for (sub in listOf("Documents", "Downloads", "Projects")) {
+                val src = File(backupRoot, sub)
+                if (src.isDirectory) {
+                    val dst = File(rootfsDir, "root/$sub")
+                    src.copyRecursively(dst, overwrite = true)
+                }
+            }
+            deleteRecursivelyNoFollow(backupRoot)
         }
     }
 
@@ -318,6 +364,7 @@ class RootfsManager(
 
     companion object {
         const val READY_MARKER_NAME = ".rootfs_ready_v1"
+        const val CURRENT_ROOTFS_SCHEMA_VERSION = 2
         private const val IO_BUFFER_SIZE = 65536
         private const val PROGRESS_INTERVAL = 250
         private const val MODE_DIR_WRITABLE = 493 // 0755

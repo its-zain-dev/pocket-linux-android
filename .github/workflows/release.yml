@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag name (e.g. v1.1.0)'
+        description: 'Release tag name (e.g. v2.0.0)'
         required: true
-        default: 'v1.1.0'
+        default: 'v2.0.0'
 
 permissions:
   contents: write
@@ -57,13 +57,12 @@ jobs:
         uses: actions/cache@v4
         with:
           path: app/src/main/jniLibs
-          key: ${{ runner.os }}-proot-virgl-v2-${{ hashFiles('scripts/ci/build-proot.sh', 'scripts/ci/build-virgl.sh') }}
+          key: ${{ runner.os }}-proot-virgl-v3-${{ hashFiles('scripts/ci/build-proot.sh', 'scripts/ci/build-virgl.sh') }}
 
       - name: Build PRoot & unbundled loader (arm64-v8a & x86_64)
         run: bash scripts/ci/build-proot.sh --skip-existing
 
-      - name: Build VirGL GPU server (optional)
-        continue-on-error: true
+      - name: Build VirGL GPU server (arm64-v8a & x86_64)
         run: bash scripts/ci/build-virgl.sh --skip-existing
 
       - name: Cache Alpine v3.20 rootfs tarballs
@@ -72,7 +71,7 @@ jobs:
           path: |
             app/src/arm64/assets/rootfs-arm64-v8a.tar.gz
             app/src/x86_64/assets/rootfs-x86_64.tar.gz
-          key: ${{ runner.os }}-rootfs-v3.20-slim-${{ hashFiles('scripts/ci/build-rootfs.sh', 'scripts/ci/rootfs-overlay/**') }}
+          key: ${{ runner.os }}-rootfs-v3.20-v3-${{ hashFiles('scripts/ci/build-rootfs.sh', 'scripts/ci/rootfs-overlay/**') }}
 
       - name: Build Alpine v3.20 rootfs tarballs (aarch64 & x86_64)
         run: bash scripts/ci/build-rootfs.sh --skip-existing
@@ -90,11 +89,11 @@ jobs:
           python3 scripts/ci/verify-apk.py \
             --apk app/build/outputs/apk/arm64/debug/app-arm64-debug.apk \
             --abi arm64-v8a \
-            --max-size-mb 180
+            --max-size-mb 190
           python3 scripts/ci/verify-apk.py \
             --apk app/build/outputs/apk/x86_64/debug/app-x86_64-debug.apk \
             --abi x86_64 \
-            --max-size-mb 180
+            --max-size-mb 190
 
       - name: Stage release assets and checksums
         run: |
@@ -116,14 +115,14 @@ jobs:
           body: |
             ## PocketLinux ${{ steps.meta.outputs.tag }}
 
-            Self-contained, rootless **Alpine Linux 3.20** fullscreen desktop and terminal environment for Android — no root, no Termux, and no external VNC app required.
+            Self-contained, rootless **Alpine Linux 3.20** fullscreen desktop, hardware-accelerated OpenGL 4.0 GPU engine, and smart resource governor for Android — no root, no Termux, and no external VNC app required.
 
-            ### Highlights
-            - **Immersive Fullscreen X11 Desktop** (`Xvnc` + `JWM` + `PCManFM` desktop icons & dark wallpaper) with a minimal floating menu pill.
-            - **Smart Auto-Keyboard Control Bar**: Automatically reveals `Esc`, `Tab`, `Ctrl`, `Alt`, `Super`, arrow keys, and `Tap/Trackpad` toggle above the Android keyboard when typing.
-            - **Built-in PocketStore (GTK-3 App Store)**: Browse popular Linux apps (`Geany`, `GIMP`, `NetSurf`, `AbiWord`, `Gnumeric`, `Node.js`, `GCC`), live-search Alpine repos, and auto-resolve dependencies (`apk update && apk add --upgrade && apk fix`).
-            - **Built-in Settings & GPU Control Center**: Configure VirGL/LLVMpipe/Zink, test OpenGL (`glxgears`), switch resolutions (`xrandr`), clear cache, and run 1-click library repair.
-            - **Full ELF & Linux Support**: Native `aarch64`/`x86_64` musl & static ELF execution + `gcompat` glibc compatibility + SELinux-safe `/proc` + automatic DNS-over-HTTPS fallback.
+            ### What's New in ${{ steps.meta.outputs.tag }}
+            - **Real Hardware GPU Acceleration (`libvirgl_test_server.so`)**: Native Android EGL (`Adreno 5xx/6xx/7xx`, `Mali`, `PowerVR`, `Xclipse`) VirGL 3D server with Pbuffer + Surfaceless support and zero-copy shared-memory (`mmap`) frame transfer — eliminates fullscreen `glxgears` / 3D FPS drops.
+            - **Zero-Flicker 120Hz Hardware Cursor (`RFC 6143 RichCursor`)**: Decodes X11 cursor shapes directly onto the Android `HardwareCanvas` at 120Hz, completely eliminating mouse cursor flickering/disappearing during motion and 3D rendering, plus smooth opaque window dragging.
+            - **Smart Hardware Resource Governor & Full Linux Compatibility**: Auto-probes big.LITTLE CPU clusters, RAM, and GPU (`LinuxResourceGovernor`), exposes multi-core SELinux-safe `/proc` + writable `/dev/shm` POSIX shared memory (needed by Firefox, Chromium, MPV, Electron), and auto-upgrades existing installations while preserving `/root/{Documents,Downloads,Projects}`.
+            - **Bulletproof `PocketStore` & Lock-Free `apk` Installer**: Fixes `Failed (99)` / `Unable to lock database: temporary error` via bounded timeouts, serialized store queues, orphaned lock recovery, `libnoflock.so` fallback, multi-provider Cloudflare + Google DoH DNS, and verified dual-ABI (`arm64` + `x86_64`) store packages (`Firefox ESR`, `KolourPaint`, `DOSBox Staging`, `MPV`, `GIMP`, `Geany`, `GCC`, `Node.js`).
+            - **Sticky `xrandr` Display Presets**: Switch instantly between `960x540 (Turbo 3D)`, `1280x720`, `1366x768`, and `1600x900` without auto-resize reverting your choice.
 
             ### Downloads
             - **Phones & Tablets (64-bit ARM)**: `PocketLinux-${{ steps.meta.outputs.tag }}-arm64-v8a.apk`

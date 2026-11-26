@@ -39,6 +39,7 @@ class LinuxRuntimeService : Service(), LinuxRuntimeController {
     private val binder = LocalBinder()
     private val serviceMonitorScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private lateinit var engine: LinuxRuntimeEngine
+    private lateinit var commandBuilder: ProotCommandBuilder
     private lateinit var virglServerManager: VirglServerManager
 
     val rfbClient: RfbClient = RfbClient()
@@ -51,9 +52,11 @@ class LinuxRuntimeService : Service(), LinuxRuntimeController {
     override fun onCreate() {
         super.onCreate()
         val rootfsManager = RootfsManager(this)
-        val commandBuilder = ProotCommandBuilder(this)
+        commandBuilder = ProotCommandBuilder(this)
         virglServerManager = VirglServerManager(commandBuilder)
-        virglServerManager.start()
+        serviceMonitorScope.launch {
+            runCatching { virglServerManager.start() }
+        }
         createNotificationChannel()
         engine = LinuxRuntimeEngine(
             rootfsProvider = RootfsManagerAdapter(rootfsManager),
@@ -99,7 +102,25 @@ class LinuxRuntimeService : Service(), LinuxRuntimeController {
     }
 
     override fun startRuntime() {
+        if (::virglServerManager.isInitialized) {
+            serviceMonitorScope.launch {
+                runCatching { virglServerManager.start() }
+            }
+        }
         engine.startRuntime()
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (::commandBuilder.isInitialized) {
+            serviceMonitorScope.launch {
+                LinuxResourceGovernor.onTrimMemory(
+                    level = level,
+                    rootfsDir = commandBuilder.rootfsDir,
+                    shmDir = commandBuilder.shmDir
+                )
+            }
+        }
     }
 
     override fun stopRuntime() {

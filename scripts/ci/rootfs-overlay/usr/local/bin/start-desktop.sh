@@ -19,22 +19,38 @@ if [ -x /usr/local/bin/fix-dns.sh ]; then
     /usr/local/bin/fix-dns.sh >/dev/null 2>&1 &
 fi
 
-# Load GPU acceleration / software rendering profile before starting Xvnc/jwm/pcmanfm
-if [ -r /etc/profile.d/pocketlinux-gpu.sh ]; then
-    # shellcheck disable=SC1091
-    . /etc/profile.d/pocketlinux-gpu.sh
-fi
-
 GEOM="${GEOM:-1024x600}"
 RFB_PORT="${RFB_PORT:-5901}"
 READY_FILE="/tmp/.pocketlinux_desktop_ready"
 DBUS_ADDR_FILE="/tmp/.pocketlinux_dbus_address"
 WALLPAPER="/usr/share/backgrounds/pocketlinux-wallpaper.png"
 
-rm -f "$READY_FILE" "${READY_FILE}.tmp" "$DBUS_ADDR_FILE" /tmp/.X1-lock /tmp/.X11-unix/X1
+rm -f "$READY_FILE" "${READY_FILE}.tmp" "$DBUS_ADDR_FILE" /tmp/.X1-lock /tmp/.X11-unix/X1 /lib/apk/db/lock 2>/dev/null || true
 chmod 1777 /tmp 2>/dev/null || true
-mkdir -p /tmp/.X11-unix /tmp/mesa_shader_cache
+mkdir -p /tmp/.X11-unix /tmp/mesa_shader_cache /run/shm
 chmod 1777 /tmp/.X11-unix 2>/dev/null || true
+if [ -d /dev/shm ]; then
+    chmod 1777 /dev/shm 2>/dev/null || true
+    ln -sfn /dev/shm /run/shm 2>/dev/null || true
+fi
+
+# Bridge directory-mounted VirGL hardware GPU socket (/tmp/.virgl_ipc/.virgl_test -> /tmp/.virgl_test)
+if [ -d /tmp/.virgl_ipc ]; then
+    v=0
+    while [ "$v" -lt 25 ] && [ ! -S /tmp/.virgl_ipc/.virgl_test ]; do
+        v=$((v + 1))
+        sleep 0.04
+    done
+    if [ -S /tmp/.virgl_ipc/.virgl_test ]; then
+        ln -sfn /tmp/.virgl_ipc/.virgl_test /tmp/.virgl_test 2>/dev/null || true
+    fi
+fi
+
+# Load GPU acceleration / hardware profile before starting Xvnc/jwm/pcmanfm
+if [ -r /etc/profile.d/pocketlinux-gpu.sh ]; then
+    # shellcheck disable=SC1091
+    . /etc/profile.d/pocketlinux-gpu.sh
+fi
 
 XVNC_PID=""
 JWM_PID=""
@@ -51,7 +67,7 @@ cleanup() {
 }
 trap cleanup TERM INT EXIT
 
-# Loopback-tuned TigerVNC: zero compression/comparison CPU overhead, 90fps ceiling, GLX enabled
+# Loopback-tuned TigerVNC: zero compression/comparison CPU overhead, RichCursor client cursor, GLX enabled
 Xvnc "$DISPLAY" \
     -geometry "$GEOM" \
     -depth 24 \
@@ -65,10 +81,13 @@ Xvnc "$DISPLAY" \
     -CompareFB 0 \
     -ImprovedHextile 0 \
     -dpi 96 \
-    -FrameRate 90 >/tmp/xvnc.log 2>&1 &
+    -FrameRate 60 >/tmp/xvnc.log 2>&1 &
 XVNC_PID=$!
 
-# Wait for X11 UNIX socket first (avoids spawning dozens of xdpyinfo processes under PRoot)
+# Boost Xvnc scheduling priority when permitted
+renice -n -4 -p "$XVNC_PID" >/dev/null 2>&1 || true
+
+# Wait for X11 UNIX socket first
 X_NUM="${DISPLAY#:}"
 X_NUM="${X_NUM%%.*}"
 X_SOCK="/tmp/.X11-unix/X${X_NUM}"
@@ -112,6 +131,7 @@ fi
 
 DISPLAY="$DISPLAY" jwm >/tmp/jwm.log 2>&1 &
 JWM_PID=$!
+renice -n -2 -p "$JWM_PID" >/dev/null 2>&1 || true
 
 if command -v pcmanfm >/dev/null 2>&1; then
     DISPLAY="$DISPLAY" pcmanfm --desktop >/tmp/pcmanfm-desktop.log 2>&1 &

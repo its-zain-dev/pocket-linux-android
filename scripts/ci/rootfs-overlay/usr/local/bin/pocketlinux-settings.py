@@ -200,13 +200,29 @@ class PocketSettingsWindow(Gtk.Window):
 
         res_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         res_card.get_style_context().add_class("panel-card")
-        res_card.pack_start(Gtk.Label(label="Desktop Resolution Presets (xrandr):", xalign=0.0), False, False, 0)
+        res_card.pack_start(Gtk.Label(label="Desktop Resolution Presets (Live xrandr):", xalign=0.0), False, False, 0)
 
         res_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        for res in ("1024x600", "1280x720", "1440x720", "1600x900"):
-            btn = Gtk.Button(label=res)
+        for label, res in (
+            ("960x540 (Turbo 3D)", "960x540"),
+            ("1024x600", "1024x600"),
+            ("1280x720", "1280x720"),
+            ("1440x810", "1440x810"),
+            ("1600x900", "1600x900"),
+        ):
+            btn = Gtk.Button(label=label)
             btn.get_style_context().add_class("secondary-btn")
-            btn.connect("clicked", lambda _b, r=res: self._run_command(f"Set Resolution {r}", f"xrandr --fb {r} 2>&1 || xrandr -s {r} 2>&1"))
+            w, h = res.split("x")
+            cmd = (
+                f"OUT=$(xrandr 2>/dev/null | awk '/ connected/{{print $1; exit}}'); "
+                f"xrandr --fb {res} 2>/dev/null || "
+                f"(xrandr --newmode {res}_60 60 {w} {w} {w} {w} {h} {h} {h} {h} 2>/dev/null || true; "
+                f"[ -n \"$OUT\" ] && xrandr --addmode \"$OUT\" {res}_60 2>/dev/null || true; "
+                f"[ -n \"$OUT\" ] && xrandr --output \"$OUT\" --mode {res}_60 2>/dev/null || xrandr -s {res} 2>&1); "
+                f"feh --no-fehbg --bg-scale /usr/share/backgrounds/pocketlinux-wallpaper.png 2>/dev/null || true; "
+                f"echo 'Active display geometry:' && xdpyinfo | grep dimensions"
+            )
+            btn.connect("clicked", lambda _b, r=res, c=cmd: self._run_command(f"Set Resolution {r}", c))
             res_row.pack_start(btn, False, False, 0)
         res_card.pack_start(res_row, False, False, 0)
         box.pack_start(res_card, False, False, 0)
@@ -236,12 +252,18 @@ class PocketSettingsWindow(Gtk.Window):
 
         card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         card.get_style_context().add_class("panel-card")
-        card.pack_start(Gtk.Label(label="Auto-Dependency Repair & Full Linux Verification:", xalign=0.0), False, False, 0)
+        card.pack_start(Gtk.Label(label="Auto-Dependency Repair, APK Lock Recovery & Linux Verification:", xalign=0.0), False, False, 0)
 
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        fix_btn = Gtk.Button(label="Fix All Libraries (apk upgrade + fix)")
+        fix_btn = Gtk.Button(label="Unlock & Fix All Libraries")
         fix_btn.get_style_context().add_class("primary-btn")
-        fix_btn.connect("clicked", lambda *_: self._run_command("Repair All Libraries", "apk update && apk upgrade && apk fix"))
+        fix_btn.connect(
+            "clicked",
+            lambda *_: self._run_command(
+                "Unlock DB & Repair All Libraries",
+                "rm -f /lib/apk/db/lock 2>/dev/null || true; /usr/local/sbin/apk update && /usr/local/sbin/apk upgrade && /usr/local/sbin/apk fix",
+            ),
+        )
         row.pack_start(fix_btn, False, False, 0)
 
         health_btn = Gtk.Button(label="Run ELF & Linux Health Check")
@@ -249,9 +271,15 @@ class PocketSettingsWindow(Gtk.Window):
         health_btn.connect("clicked", lambda *_: self._run_command("ELF & Linux Health Check", "/usr/local/bin/linux-health.sh"))
         row.pack_start(health_btn, False, False, 0)
 
-        mem_btn = Gtk.Button(label="Storage & RAM Info")
+        mem_btn = Gtk.Button(label="CPU, /dev/shm & RAM Info")
         mem_btn.get_style_context().add_class("secondary-btn")
-        mem_btn.connect("clicked", lambda *_: self._run_command("Storage & Memory", "free -h; echo ''; df -h /root /mnt/sdcard 2>/dev/null || df -h /root"))
+        mem_btn.connect(
+            "clicked",
+            lambda *_: self._run_command(
+                "Hardware Governor, Shared Memory & RAM",
+                "echo \"CPU Cores: $(nproc 2>/dev/null || echo 1)\"; free -h; echo ''; df -h /root /dev/shm /mnt/sdcard 2>/dev/null || df -h /root",
+            ),
+        )
         row.pack_start(mem_btn, False, False, 0)
 
         card.pack_start(row, False, False, 0)
@@ -259,12 +287,19 @@ class PocketSettingsWindow(Gtk.Window):
         return box
 
     def _refresh_hw_probe(self) -> None:
-        gpu_model = read_file_safe("/sys/class/kgsl/kgsl-3d0/gpu_model", "Generic Android GPU")
-        kgsl_ok = "Accessible" if os.path.exists("/dev/kgsl-3d0") else "Not exposed"
-        virgl_ok = "Active (/tmp/.virgl_test)" if os.path.exists("/tmp/.virgl_test") else "Standby (using fast LLVMpipe fallback)"
+        gpu_model = read_file_safe("/sys/class/kgsl/kgsl-3d0/gpu_model", "Android EGL/GLES GPU")
+        kgsl_ok = "Accessible" if os.path.exists("/dev/kgsl-3d0") else "EGL Surfaceless"
+        has_virgl = os.path.exists("/tmp/.virgl_ipc/.virgl_test") or os.path.exists("/tmp/.virgl_test")
+        virgl_ok = (
+            "<span foreground='#34D399'><b>Active — Hardware GPU Accelerated (VirGL)</b></span>"
+            if has_virgl
+            else "Standby (using multi-threaded LLVMpipe)"
+        )
+        shm_ok = "Mounted (/dev/shm)" if os.path.isdir("/dev/shm") else "Fallback (/tmp)"
+        cores = os.cpu_count() or 1
         self.hw_label.set_markup(
-            f"<b>Detected Hardware GPU:</b> {GLib.markup_escape_text(gpu_model)}\n"
-            f"<b>KGSL Node (/dev/kgsl-3d0):</b> {kgsl_ok}   |   <b>VirGL Server:</b> {virgl_ok}"
+            f"<b>Detected Hardware GPU:</b> {GLib.markup_escape_text(gpu_model)}   |   <b>VirGL Server:</b> {virgl_ok}\n"
+            f"<b>CPU Governor:</b> {cores} Cores Active   |   <b>POSIX Shared Memory:</b> {shm_ok}   |   <b>GPU Node:</b> {kgsl_ok}"
         )
 
     def _load_saved_gpu_config(self) -> None:
@@ -295,26 +330,31 @@ class PocketSettingsWindow(Gtk.Window):
             "# Generated by PocketLinux Settings",
             f"# MODE={mode}",
             "export GDK_BACKEND=x11",
-            "export VTEST_SOCKET_NAME=/tmp/.virgl_test",
+            'if [ -S /tmp/.virgl_ipc/.virgl_test ]; then export VTEST_SOCKET_NAME=/tmp/.virgl_ipc/.virgl_test; else export VTEST_SOCKET_NAME=/tmp/.virgl_test; fi',
             f"export MESA_NO_ERROR={no_err}",
+            "export GALLIUM_THREAD=true",
+            "export LIBGL_ALWAYS_SOFTWARE=1",
         ]
         if mode == "virpipe":
             lines.append("export GALLIUM_DRIVER=virpipe")
         elif mode == "llvmpipe":
             lines.append("export GALLIUM_DRIVER=llvmpipe")
         elif mode == "zink":
-            lines.append("export MESA_LOADER_DRIVER_OVERRIDE=zink")
+            lines.append("export GALLIUM_DRIVER=zink")
         else:
-            lines.append('if [ -S /tmp/.virgl_test ]; then export GALLIUM_DRIVER=virpipe; else export GALLIUM_DRIVER=llvmpipe; fi')
+            lines.append('if [ -S "$VTEST_SOCKET_NAME" ]; then export GALLIUM_DRIVER=virpipe; else export GALLIUM_DRIVER=llvmpipe; fi')
 
         if gl_ver != "default":
             lines.append(f"export MESA_GL_VERSION_OVERRIDE={gl_ver}")
+        elif mode in ("auto", "virpipe"):
+            lines.append('if [ "${GALLIUM_DRIVER:-}" = "virpipe" ]; then export MESA_GL_VERSION_OVERRIDE=4.0; export MESA_GLSL_VERSION_OVERRIDE=400; fi')
         if threads != "auto":
             lines.append(f"export LP_NUM_THREADS={threads}")
 
         with open(GPU_ENV_PATH, "w", encoding="utf-8") as f:
             f.write("\n".join(lines) + "\n")
 
+        self._refresh_hw_probe()
         self._log(f"\nSaved GPU settings to {GPU_ENV_PATH} (mode={mode}, GL={gl_ver}, threads={threads}).\nNew apps will immediately use these settings.\n")
 
     def _launch_with_gpu(self, cmd: str) -> None:

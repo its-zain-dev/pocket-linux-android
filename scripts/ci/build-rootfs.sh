@@ -228,6 +228,8 @@ install_desktop_and_home() {
         "$rootfs/root/.config/libfm" \
         "$rootfs/root/.config/pcmanfm/default" \
         "$rootfs/usr/local/bin" \
+        "$rootfs/usr/local/sbin" \
+        "$rootfs/usr/local/lib" \
         "$rootfs/etc/profile.d" \
         "$rootfs/root/.config/pocketlinux"
 
@@ -339,6 +341,13 @@ XTerm*cursorColor: #38BDF8
 XTerm*scrollBar: false
 XTerm*saveLines: 4096
 XTerm*selectToClipboard: true
+XTerm*loginShell: true
+EOF
+
+    cat <<'EOF' | sudo tee "$rootfs/root/.bashrc" >/dev/null
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+[ -r /etc/pocketlinux-hardware.env ] && . /etc/pocketlinux-hardware.env
+[ -r /etc/profile.d/pocketlinux-gpu.sh ] && . /etc/profile.d/pocketlinux-gpu.sh
 EOF
 
 
@@ -495,11 +504,13 @@ EOF
     sudo cp "$OVERLAY_DIR/usr/local/bin/fix-dns.sh" "$rootfs/usr/local/bin/fix-dns.sh"
     sudo cp "$OVERLAY_DIR/usr/local/bin/pocketlinux-store.py" "$rootfs/usr/local/bin/pocketlinux-store.py"
     sudo cp "$OVERLAY_DIR/usr/local/bin/pocketlinux-settings.py" "$rootfs/usr/local/bin/pocketlinux-settings.py"
+    sudo cp "$OVERLAY_DIR/usr/local/sbin/apk" "$rootfs/usr/local/sbin/apk"
     sudo cp "$OVERLAY_DIR/etc/profile.d/pocketlinux-gpu.sh" "$rootfs/etc/profile.d/pocketlinux-gpu.sh"
 
     sudo chown -R 0:0 "$rootfs/root" "$rootfs/usr/local" "$rootfs/usr/share/backgrounds"
     sudo chmod 0644 \
         "$rootfs/root/.jwmrc" \
+        "$rootfs/root/.bashrc" \
         "$rootfs/etc/profile.d/pocketlinux-gpu.sh" \
         "$rootfs/root/.Xresources" \
         "$rootfs/root/.config/user-dirs.dirs" \
@@ -525,7 +536,8 @@ EOF
         "$rootfs/usr/local/bin/run-elf.sh" \
         "$rootfs/usr/local/bin/pocketlinux-store.py" \
         "$rootfs/usr/local/bin/pocketlinux-settings.py" \
-        "$rootfs/usr/local/bin/fix-dns.sh"
+        "$rootfs/usr/local/bin/fix-dns.sh" \
+        "$rootfs/usr/local/sbin/apk"
 }
 
 build_rootfs_for_abi() {
@@ -613,6 +625,8 @@ PYEOF
         fi
     fi
 
+    printf '%s/main\n%s/community\n' "$ALPINE_MIRROR" "$ALPINE_MIRROR" | sudo tee "$rootfs/etc/apk/repositories" >/dev/null
+    sudo chmod 0644 "$rootfs/etc/apk/repositories"
     sudo cp /etc/resolv.conf "$rootfs/etc/resolv.conf" 2>/dev/null || true
 
     sudo mount -t proc proc "$rootfs/proc"
@@ -625,19 +639,42 @@ PYEOF
         --no-cache \
         add "${PACKAGES[@]}"
 
-    sudo chroot "$rootfs" /bin/sh -c "fc-cache -f || true; update-desktop-database /usr/share/applications 2>/dev/null || true; update-mime-database /usr/share/mime 2>/dev/null || true"
+    install_desktop_and_home "$rootfs"
+
+    sudo chroot "$rootfs" /bin/sh -c '
+        set -eu
+        /sbin/apk add --no-cache gcc musl-dev
+        printf "int flock(int fd, int op) { (void)fd; (void)op; return 0; }\n" \
+            | gcc -shared -fPIC -O2 -s -xc - -o /usr/local/lib/libnoflock.so
+        chmod 0755 /usr/local/lib/libnoflock.so
+        /sbin/apk del --no-cache gcc musl-dev
+
+        /sbin/apk info -q -L mesa-demos 2>/dev/null | while IFS= read -r rel; do
+            case "$rel" in
+                usr/bin/glxgears|usr/bin/glxinfo|usr/bin/eglinfo|usr/bin/es2_info|usr/bin/es2gears_x11|usr/bin/gears) ;;
+                usr/bin/*) rm -f "/$rel" ;;
+            esac
+        done
+
+        fc-cache -f || true
+        gtk-update-icon-cache -f -t /usr/share/icons/Adwaita 2>/dev/null || true
+        gtk-update-icon-cache -f -t /usr/share/icons/hicolor 2>/dev/null || true
+        gdk-pixbuf-query-loaders --update-cache 2>/dev/null || true
+        glib-compile-schemas /usr/share/glib-2.0/schemas 2>/dev/null || true
+        update-desktop-database /usr/share/applications 2>/dev/null || true
+        update-mime-database /usr/share/mime 2>/dev/null || true
+        python3 -m py_compile /usr/local/bin/pocketlinux-store.py /usr/local/bin/pocketlinux-settings.py || true
+    '
 
     unmount_rootfs "$rootfs"
 
     printf 'nameserver 8.8.8.8\nnameserver 1.1.1.1\n' | sudo tee "$rootfs/etc/resolv.conf" >/dev/null
     sudo chmod 0644 "$rootfs/etc/resolv.conf"
 
-    sudo rm -f "$rootfs/usr/bin/qemu-aarch64-static" "$rootfs/usr/bin/qemu-aarch64"
+    sudo rm -f "$rootfs/usr/bin/qemu-aarch64-static" "$rootfs/usr/bin/qemu-aarch64" "$rootfs/lib/apk/db/lock"
     sudo rm -rf "$rootfs/var/cache/apk/"*
-    sudo mkdir -p "$rootfs/tmp/.X11-unix"
-    sudo chmod 1777 "$rootfs/tmp" "$rootfs/tmp/.X11-unix"
-
-    install_desktop_and_home "$rootfs"
+    sudo mkdir -p "$rootfs/tmp/.X11-unix" "$rootfs/dev/shm" "$rootfs/run/shm"
+    sudo chmod 1777 "$rootfs/tmp" "$rootfs/tmp/.X11-unix" "$rootfs/dev/shm" "$rootfs/run/shm"
 
     local tmp_out="${out_tar}.tmp"
     sudo tar --numeric-owner -czf "$tmp_out" -C "$rootfs" .

@@ -417,4 +417,53 @@ class RootfsManagerTest {
         assertEquals(1023, posix.recordedModes[stagingTmp])
         assertEquals(1023, posix.recordedModes[stagingX11])
     }
+
+    @Test
+    fun schemaVersionUpgradeReextractsRootfsWhilePreservingUserHomeFiles() {
+        val filesDir = tempFolder.newFolder("files9")
+        val cacheDir = tempFolder.newFolder("cache9")
+        val posix = JvmPosixOps()
+
+        val v1Archive = buildTarGz(
+            listOf(
+                SyntheticEntry.Dir("./bin/", mode = 493),
+                SyntheticEntry.RegularFile("./bin/busybox", "v1".toByteArray(), mode = 493),
+                SyntheticEntry.Dir("./root/Documents/", mode = 493)
+            )
+        )
+        val v1Manager = RootfsManager(
+            filesDir = filesDir,
+            cacheDir = cacheDir,
+            availableAssets = setOf("rootfs-arm64-v8a.tar.gz"),
+            openAsset = { ByteArrayInputStream(v1Archive) },
+            supportedAbis = listOf("arm64-v8a"),
+            posixOps = posix,
+            rootfsSchemaVersion = 1
+        )
+        v1Manager.ensureExtracted()
+        val userNote = File(v1Manager.rootfsDir, "root/Documents/my-notes.txt")
+        userNote.writeText("important-user-data")
+
+        val v2Archive = buildTarGz(
+            listOf(
+                SyntheticEntry.Dir("./bin/", mode = 493),
+                SyntheticEntry.RegularFile("./bin/busybox", "v2-upgraded".toByteArray(), mode = 493),
+                SyntheticEntry.Dir("./root/Documents/", mode = 493)
+            )
+        )
+        val v2Manager = RootfsManager(
+            filesDir = filesDir,
+            cacheDir = cacheDir,
+            availableAssets = setOf("rootfs-arm64-v8a.tar.gz"),
+            openAsset = { ByteArrayInputStream(v2Archive) },
+            supportedAbis = listOf("arm64-v8a"),
+            posixOps = posix,
+            rootfsSchemaVersion = 2
+        )
+        assertFalse(v2Manager.isReady())
+        v2Manager.ensureExtracted()
+        assertTrue(v2Manager.isReady())
+        assertEquals("v2-upgraded", File(v2Manager.rootfsDir, "bin/busybox").readText())
+        assertEquals("important-user-data", File(v2Manager.rootfsDir, "root/Documents/my-notes.txt").readText())
+    }
 }

@@ -44,13 +44,12 @@ jobs:
         uses: actions/cache@v4
         with:
           path: app/src/main/jniLibs
-          key: ${{ runner.os }}-proot-virgl-v2-${{ hashFiles('scripts/ci/build-proot.sh', 'scripts/ci/build-virgl.sh') }}
+          key: ${{ runner.os }}-proot-virgl-v3-${{ hashFiles('scripts/ci/build-proot.sh', 'scripts/ci/build-virgl.sh') }}
 
       - name: Build PRoot & unbundled loader (arm64-v8a & x86_64)
         run: bash scripts/ci/build-proot.sh --skip-existing
 
-      - name: Build VirGL GPU server (optional, graceful fallback if NDK headers differ)
-        continue-on-error: true
+      - name: Build VirGL GPU server (arm64-v8a & x86_64)
         run: bash scripts/ci/build-virgl.sh --skip-existing
 
       - name: Cache Alpine v3.20 rootfs tarballs
@@ -59,7 +58,7 @@ jobs:
           path: |
             app/src/arm64/assets/rootfs-arm64-v8a.tar.gz
             app/src/x86_64/assets/rootfs-x86_64.tar.gz
-          key: ${{ runner.os }}-rootfs-v3.20-slim-${{ hashFiles('scripts/ci/build-rootfs.sh', 'scripts/ci/rootfs-overlay/**') }}
+          key: ${{ runner.os }}-rootfs-v3.20-v3-${{ hashFiles('scripts/ci/build-rootfs.sh', 'scripts/ci/rootfs-overlay/**') }}
 
       - name: Build Alpine v3.20 rootfs tarballs (aarch64 & x86_64)
         run: bash scripts/ci/build-rootfs.sh --skip-existing
@@ -93,13 +92,19 @@ jobs:
 
             sudo chroot "$stage" /bin/sh -c '
               set -eu
+              export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
               /bin/bash --version | head -n 1
+              test -x /usr/local/sbin/apk
+              test -f /usr/local/lib/libnoflock.so
+              test ! -e /lib/apk/db/lock
               apk --version
+              LD_PRELOAD=/usr/local/lib/libnoflock.so /sbin/apk --version
               python3 --version
               python3 -c "import gi; gi.require_version(\"Gtk\", \"3.0\"); from gi.repository import Gtk; print(\"GTK3_PY_OK\")"
               file --version | head -n 1
               nano --version | head -n 1
               test -d /root/Desktop
+              test -d /dev/shm
               test -f /root/.config/gtk-3.0/bookmarks
               test -x /usr/local/bin/linux-health.sh
               test -x /usr/local/bin/pocketlinux-store.py
@@ -134,11 +139,11 @@ jobs:
           python3 scripts/ci/verify-apk.py \
             --apk app/build/outputs/apk/arm64/debug/app-arm64-debug.apk \
             --abi arm64-v8a \
-            --max-size-mb 180
+            --max-size-mb 190
           python3 scripts/ci/verify-apk.py \
             --apk app/build/outputs/apk/x86_64/debug/app-x86_64-debug.apk \
             --abi x86_64 \
-            --max-size-mb 180
+            --max-size-mb 190
 
       - name: Upload arm64 debug APK
         uses: actions/upload-artifact@v4

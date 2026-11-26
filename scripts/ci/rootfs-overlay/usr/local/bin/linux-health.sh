@@ -99,8 +99,18 @@ if [ "$SMOKE_ONLY" -eq 0 ]; then
         warn "Phone storage /mnt/phone not mounted (use /mnt/sdcard)"
     fi
 
+    if [ -d /dev/shm ] && touch /dev/shm/.pocketlinux_shm_probe 2>/dev/null; then
+        rm -f /dev/shm/.pocketlinux_shm_probe
+        ok "POSIX shared memory writable (/dev/shm)"
+    else
+        warn "POSIX /dev/shm not mounted"
+    fi
+
     if DISPLAY="${DISPLAY:-:1}" xdpyinfo >/dev/null 2>&1; then
         ok "X11 Display ${DISPLAY:-:1} active"
+        if [ -S /tmp/.virgl_ipc/.virgl_test ] || [ -S /tmp/.virgl_test ]; then
+            ok "VirGL hardware GPU acceleration socket active"
+        fi
     else
         warn "X11 Display ${DISPLAY:-:1} not currently running"
     fi

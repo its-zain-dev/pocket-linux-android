@@ -19,12 +19,14 @@ data class ProotCommand(
 class ProotCommandBuilder(
     filesDir: File,
     cacheDir: File,
-    nativeLibraryDir: File
+    nativeLibraryDir: File,
+    private val appContext: Context? = null
 ) {
     constructor(context: Context) : this(
         filesDir = context.filesDir,
         cacheDir = context.cacheDir,
-        nativeLibraryDir = File(context.applicationInfo.nativeLibraryDir)
+        nativeLibraryDir = File(context.applicationInfo.nativeLibraryDir),
+        appContext = context.applicationContext
     )
 
     val prootExecutable: File = File(nativeLibraryDir, "libproot.so")
@@ -32,53 +34,28 @@ class ProotCommandBuilder(
     val rootfsDir: File = File(filesDir, "rootfs")
     val sharedDir: File = File(filesDir, "shared")
     val prootTmpDir: File = File(cacheDir, "proot_tmp")
+    val shmDir: File = File(cacheDir, "proot_shm")
+    val virglIpcDir: File = File(cacheDir, "virgl_ipc")
     val fakeProcDir: File = File(filesDir, "proot_fake_proc")
 
     /**
-     * Ensures auxiliary runtime directories and SELinux-safe fake /proc files exist
-     * so tools like htop, ps, uptime, and ELF binaries work reliably on Android 8-15.
+     * Ensures auxiliary runtime directories, POSIX `/dev/shm` shared memory, VirGL IPC dir,
+     * and dynamic multi-core `/proc` files synced from real Android hardware exist.
      */
     fun ensureRuntimeDirsAndFakeProc() {
         runCatching {
             if (!sharedDir.isDirectory) sharedDir.mkdirs()
             if (!prootTmpDir.isDirectory) prootTmpDir.mkdirs()
+            if (!shmDir.isDirectory) shmDir.mkdirs()
+            if (!virglIpcDir.isDirectory) virglIpcDir.mkdirs()
             if (!fakeProcDir.isDirectory) fakeProcDir.mkdirs()
 
-            writeIfMissing(
-                File(fakeProcDir, "loadavg"),
-                "0.12 0.08 0.05 1/128 1001\n"
+            val profile = LinuxResourceGovernor.probeHardware(appContext)
+            LinuxResourceGovernor.refreshDynamicFakeProc(
+                fakeProcDir = fakeProcDir,
+                rootfsDir = rootfsDir,
+                profile = profile
             )
-            writeIfMissing(
-                File(fakeProcDir, "stat"),
-                buildString {
-                    append("cpu  1000 0 500 50000 0 0 0 0 0 0\n")
-                    append("cpu0 1000 0 500 50000 0 0 0 0 0 0\n")
-                    append("intr 0\n")
-                    append("ctxt 1024\n")
-                    append("btime 1700000000\n")
-                    append("processes 64\n")
-                    append("procs_running 1\n")
-                    append("procs_blocked 0\n")
-                }
-            )
-            writeIfMissing(
-                File(fakeProcDir, "uptime"),
-                "3600.00 7200.00\n"
-            )
-            writeIfMissing(
-                File(fakeProcDir, "version"),
-                "Linux version 6.1.0-pocketlinux (gcc) #1 SMP PREEMPT\n"
-            )
-            writeIfMissing(
-                File(fakeProcDir, "vmstat"),
-                "nr_free_pages 65536\npgpgin 1024\npgpgout 512\n"
-            )
-        }
-    }
-
-    private fun writeIfMissing(file: File, content: String) {
-        if (!file.isFile || file.length() == 0L) {
-            file.writeText(content)
         }
     }
 
@@ -143,6 +120,16 @@ class ProotCommandBuilder(
             "-b", "/sys",
             "-b", "${sharedDir.absolutePath}:/mnt/sdcard"
         )
+
+        if (shmDir.isDirectory) {
+            argv.add("-b")
+            argv.add("${shmDir.absolutePath}:/dev/shm")
+        }
+
+        if (virglIpcDir.isDirectory) {
+            argv.add("-b")
+            argv.add("${virglIpcDir.absolutePath}:/tmp/.virgl_ipc")
+        }
 
         val virglSocket = File(prootTmpDir, VirglServerManager.DEFAULT_SOCKET_NAME)
         if (virglSocket.exists()) {
@@ -270,6 +257,6 @@ class ProotCommandBuilder(
     }
 
     companion object {
-        private val FAKE_PROC_FILES = listOf("stat", "uptime", "version", "loadavg", "vmstat")
+        private val FAKE_PROC_FILES = listOf("stat", "uptime", "version", "loadavg", "vmstat", "filesystems")
     }
 }

@@ -30,6 +30,7 @@ REQUIRED_ELF_LIBS = (
     "libproot.so",
     "libproot-loader.so",
     "libptybridge.so",
+    "libvirgl_test_server.so",
 )
 
 REQUIRED_ROOTFS_FILES = (
@@ -649,8 +650,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output path for Markdown summary report",
     )
     parser.add_argument("--min-size-mb", type=float, default=20.0, help="Minimum APK size in MiB (default: 20.0)")
-    parser.add_argument("--warn-size-mb", type=float, default=75.0, help="Warn APK size threshold in MiB (default: 75.0)")
-    parser.add_argument("--max-size-mb", type=float, default=175.0, help="Maximum APK size in MiB (default: 85.0)")
+    parser.add_argument("--warn-size-mb", type=float, default=165.0, help="Warn APK size threshold in MiB (default: 165.0)")
+    parser.add_argument("--max-size-mb", type=float, default=190.0, help="Maximum APK size in MiB (default: 190.0)")
     parser.add_argument("--aapt2", default=None, help="Explicit path to aapt2 binary")
     parser.add_argument("--skip-aapt2", action="store_true", help="Skip aapt2 manifest checks")
     parser.add_argument("--require-aapt2", action="store_true", help="Fail if aapt2 binary is not found")

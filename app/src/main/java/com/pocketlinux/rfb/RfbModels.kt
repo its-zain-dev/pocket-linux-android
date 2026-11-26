@@ -73,6 +73,33 @@ class RfbProtocolException(
     cause: Throwable? = null
 ) : IOException(message, cause)
 
+data class RfbCursorShape(
+    val width: Int,
+    val height: Int,
+    val hotX: Int,
+    val hotY: Int,
+    val pixels: IntArray
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is RfbCursorShape) return false
+        return width == other.width &&
+            height == other.height &&
+            hotX == other.hotX &&
+            hotY == other.hotY &&
+            pixels.contentEquals(other.pixels)
+    }
+
+    override fun hashCode(): Int {
+        var result = width
+        result = 31 * result + height
+        result = 31 * result + hotX
+        result = 31 * result + hotY
+        result = 31 * result + pixels.contentHashCode()
+        return result
+    }
+}
+
 object RfbConstants {
     const val DEFAULT_HOST = "127.0.0.1"
     const val DEFAULT_PORT = 5901
@@ -86,6 +113,7 @@ object RfbConstants {
     const val ENCODING_HEXTILE = 5
     const val ENCODING_ZLIB = 6
     const val ENCODING_DESKTOP_SIZE = -223
+    const val ENCODING_CURSOR = -239
     const val ENCODING_EXTENDED_DESKTOP_SIZE = -308
 
     const val MSG_SET_PIXEL_FORMAT = 0
@@ -118,6 +146,7 @@ object RfbConstants {
         ENCODING_RAW,
         ENCODING_HEXTILE,
         ENCODING_ZLIB,
+        ENCODING_CURSOR,
         ENCODING_DESKTOP_SIZE,
         ENCODING_EXTENDED_DESKTOP_SIZE
     )
