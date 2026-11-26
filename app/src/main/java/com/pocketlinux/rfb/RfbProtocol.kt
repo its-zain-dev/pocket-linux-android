@@ -23,6 +23,7 @@ class RfbProtocol : Closeable {
             extended: Boolean,
             primaryScreenId: Long
         ) {}
+        fun onCursorShapeUpdated(cursor: RfbCursorShape) {}
         fun onBell() {}
         fun onServerCutText(text: String) {}
     }
@@ -341,6 +342,10 @@ class RfbProtocol : Closeable {
                 RfbConstants.ENCODING_COPYRECT -> readCopyRect(input, framebuffer, x, y, w, h)
                 RfbConstants.ENCODING_HEXTILE -> readHextileRect(input, framebuffer, x, y, w, h)
                 RfbConstants.ENCODING_ZLIB -> readZlibRect(input, framebuffer, x, y, w, h)
+                RfbConstants.ENCODING_CURSOR -> {
+                    val cursor = readRichCursor(input, x, y, w, h)
+                    listener.onCursorShapeUpdated(cursor)
+                }
                 RfbConstants.ENCODING_DESKTOP_SIZE -> {
                     validateDimensionsForProtocol(w, h)
                     framebuffer.resize(w, h)
@@ -361,6 +366,57 @@ class RfbProtocol : Closeable {
         }
 
         listener.onFramebufferUpdated(resized)
+    }
+
+    private fun readRichCursor(
+        input: DataInputStream,
+        hotX: Int,
+        hotY: Int,
+        w: Int,
+        h: Int
+    ): RfbCursorShape {
+        if (w > 512 || h > 512) {
+            throw RfbProtocolException("RichCursor dimensions exceed cap (512x512): ${w}x$h")
+        }
+        if (w == 0 || h == 0) {
+            return RfbCursorShape(0, 0, 0, 0, IntArray(0))
+        }
+        val pixelBytesCount = w * h * 4
+        val pixelBytes = ensureRowBuffer(pixelBytesCount)
+        input.readFully(pixelBytes, 0, pixelBytesCount)
+
+        val maskRowBytes = (w + 7) / 8
+        val maskBytesCount = maskRowBytes * h
+        val maskBytes = ByteArray(maskBytesCount)
+        input.readFully(maskBytes, 0, maskBytesCount)
+
+        val outPixels = IntArray(w * h)
+        var srcIdx = 0
+        var dstIdx = 0
+        for (ry in 0 until h) {
+            val maskRowStart = ry * maskRowBytes
+            for (rx in 0 until w) {
+                val maskByte = maskBytes[maskRowStart + (rx shr 3)].toInt() and 0xFF
+                val visible = ((maskByte shr (7 - (rx and 7))) and 1) != 0
+                if (visible) {
+                    val b = pixelBytes[srcIdx].toInt() and 0xFF
+                    val g = (pixelBytes[srcIdx + 1].toInt() and 0xFF) shl 8
+                    val r = (pixelBytes[srcIdx + 2].toInt() and 0xFF) shl 16
+                    outPixels[dstIdx] = -0x1000000 or r or g or b
+                } else {
+                    outPixels[dstIdx] = 0
+                }
+                srcIdx += 4
+                dstIdx += 1
+            }
+        }
+        return RfbCursorShape(
+            width = w,
+            height = h,
+            hotX = hotX.coerceIn(0, w - 1),
+            hotY = hotY.coerceIn(0, h - 1),
+            pixels = outPixels
+        )
     }
 
     private fun readRawRect(

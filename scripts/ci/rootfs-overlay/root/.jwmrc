@@ -122,7 +122,7 @@
     <DoubleClickDelta>4</DoubleClickDelta>
     <FocusModel>click</FocusModel>
     <SnapMode distance="10">border</SnapMode>
-    <MoveMode>outline</MoveMode>
+    <MoveMode>opaque</MoveMode>
     <ResizeMode>outline</ResizeMode>
 
     <Key mask="A" key="Tab">nextstacked</Key>

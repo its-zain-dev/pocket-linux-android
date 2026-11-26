@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RectF
 import android.text.InputType
 import android.view.KeyEvent
@@ -69,9 +70,7 @@ fun LinuxDesktopSurface(
             enableAcceleration = true,
             onPointerEvent = { x, y, mask ->
                 currentController.sendPointerEvent(x, y, mask)
-                if (currentMode == TouchInputMode.TRACKPAD || mask != 0) {
-                    surfaceHolderRef[0]?.requestRender()
-                }
+                surfaceHolderRef[0]?.requestRender()
             }
         )
     }
@@ -97,9 +96,9 @@ fun LinuxDesktopSurface(
         }
     }
 
-    LaunchedEffect(autoResizeDesktop, surfaceSize, connectionState) {
-        if (!autoResizeDesktop) return@LaunchedEffect
-        if (connectionState !is RfbConnectionState.Connected) return@LaunchedEffect
+    val isConnected = connectionState is RfbConnectionState.Connected
+    LaunchedEffect(autoResizeDesktop, surfaceSize, isConnected) {
+        if (!autoResizeDesktop || !isConnected) return@LaunchedEffect
         if (surfaceSize.width <= 0 || surfaceSize.height <= 0) return@LaunchedEffect
         delay(200L)
         val target = computeAutoDesktopSize(
@@ -325,14 +324,20 @@ private class DesktopSurfaceView(
     private val cursorStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.BLACK
         style = Paint.Style.STROKE
-        strokeWidth = 2.5f
+        strokeWidth = 2.0f
     }
     private val dstRect = RectF()
+    private val cursorDstRect = RectF()
+    private val fallbackArrowPath = Path()
 
     @Volatile
     private var surfaceActive = false
     private var renderExecutor: ExecutorService? = null
     private var reusableBitmap: Bitmap? = null
+    private var cachedCursorBitmap: Bitmap? = null
+    private var cachedCursorGen: Long = -1L
+    private var cachedCursorHotX: Int = 0
+    private var cachedCursorHotY: Int = 0
 
     init {
         isFocusable = true
@@ -458,6 +463,9 @@ private class DesktopSurfaceView(
             renderExecutor = null
             reusableBitmap?.recycle()
             reusableBitmap = null
+            cachedCursorBitmap?.recycle()
+            cachedCursorBitmap = null
+            cachedCursorGen = -1L
         }
         oldExecutor?.shutdownNow()
     }
@@ -480,6 +488,40 @@ private class DesktopSurfaceView(
         }
     }
 
+    private fun resolveCursorBitmap(rfbClient: RfbClient): Bitmap? {
+        val gen = rfbClient.cursorGeneration.get()
+        if (gen == cachedCursorGen) {
+            return cachedCursorBitmap
+        }
+        cachedCursorBitmap?.recycle()
+        cachedCursorBitmap = null
+        cachedCursorGen = gen
+
+        val shape = rfbClient.cursorShape ?: return null
+        if (shape.width <= 0 || shape.height <= 0 || shape.pixels.size < shape.width * shape.height) {
+            return null
+        }
+        cachedCursorHotX = shape.hotX
+        cachedCursorHotY = shape.hotY
+        val bmp = Bitmap.createBitmap(shape.pixels, shape.width, shape.height, Bitmap.Config.ARGB_8888)
+        cachedCursorBitmap = bmp
+        return bmp
+    }
+
+    private fun drawFallbackArrow(canvas: android.graphics.Canvas, cx: Float, cy: Float) {
+        fallbackArrowPath.reset()
+        fallbackArrowPath.moveTo(cx, cy)
+        fallbackArrowPath.lineTo(cx, cy + 20f)
+        fallbackArrowPath.lineTo(cx + 5.5f, cy + 15f)
+        fallbackArrowPath.lineTo(cx + 9.5f, cy + 23f)
+        fallbackArrowPath.lineTo(cx + 12.5f, cy + 21.5f)
+        fallbackArrowPath.lineTo(cx + 8.5f, cy + 13.5f)
+        fallbackArrowPath.lineTo(cx + 15f, cy + 13.5f)
+        fallbackArrowPath.close()
+        canvas.drawPath(fallbackArrowPath, cursorFillPaint)
+        canvas.drawPath(fallbackArrowPath, cursorStrokePaint)
+    }
+
     private fun drawFrame() {
         synchronized(renderLock) {
             if (!surfaceActive || !holder.surface.isValid) return
@@ -493,6 +535,7 @@ private class DesktopSurfaceView(
                 ownedSnapshot = controller.snapshotBitmap()
                 ownedSnapshot
             }
+            val cursorBmp = if (controller is RfbClient) resolveCursorBitmap(controller) else null
 
             val canvas = try {
                 holder.lockHardwareCanvas()
@@ -525,18 +568,30 @@ private class DesktopSurfaceView(
                         )
                         canvas.drawBitmap(frameBitmap, null, dstRect, bitmapPaint)
 
+                        val curX = touchController.cursorX
+                        val curY = touchController.cursorY
+                        val cursorHiddenByServer = (controller as? RfbClient)?.cursorShape?.let {
+                            it.width == 0 || it.height == 0
+                        } == true
                         if (
-                            (modeProvider() == TouchInputMode.TRACKPAD || touchController.isDragging) &&
-                            touchController.cursorX in 0 until frameBitmap.width &&
-                            touchController.cursorY in 0 until frameBitmap.height
+                            !cursorHiddenByServer &&
+                            (curX in 0 until frameBitmap.width && curY in 0 until frameBitmap.height) &&
+                            (modeProvider() == TouchInputMode.TRACKPAD || cursorBmp != null || touchController.isDragging)
                         ) {
-                            val (cx, cy) = desktopToView(
-                                touchController.cursorX,
-                                touchController.cursorY,
-                                vp
-                            )
-                            canvas.drawCircle(cx, cy, 7f, cursorFillPaint)
-                            canvas.drawCircle(cx, cy, 7f, cursorStrokePaint)
+                            val (cx, cy) = desktopToView(curX, curY, vp)
+                            if (cursorBmp != null && !cursorBmp.isRecycled) {
+                                val left = cx - cachedCursorHotX * vp.scale
+                                val top = cy - cachedCursorHotY * vp.scale
+                                cursorDstRect.set(
+                                    left,
+                                    top,
+                                    left + cursorBmp.width * vp.scale,
+                                    top + cursorBmp.height * vp.scale
+                                )
+                                canvas.drawBitmap(cursorBmp, null, cursorDstRect, bitmapPaint)
+                            } else {
+                                drawFallbackArrow(canvas, cx, cy)
+                            }
                         }
                     }
                 }

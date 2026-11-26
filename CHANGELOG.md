@@ -2,6 +2,25 @@
 
 All notable changes to **PocketLinux for Android** are documented in this file.
 
+## [2.0.0] - 2026-11-26
+
+### Added & Performance
+- **Real Android Hardware GPU Acceleration (`libvirgl_test_server.so`)**:
+  - Fixed Android NDK cross-compilation of `virglrenderer 1.0.1` + `libepoxy 1.5.10` (`scripts/ci/build-virgl.sh`) with native `EGL_DEFAULT_DISPLAY`, `1x1` Pbuffer fallback for Qualcomm Adreno 5xx & older Mali GPUs lacking `EGL_KHR_surfaceless_context`, and SELinux-safe zero-copy `TMPDIR` shared-memory (`mmap`) fallback when `memfd_create` is restricted.
+  - Made `libvirgl_test_server.so` mandatory in CI, E2E, and Release APK verification (`verify-apk.py` & `verify_apks.py`), supervised automatically by `VirglServerManager` via `<cacheDir>/virgl_ipc/.virgl_test`.
+  - Fixed Mesa GLX `drisw` VirGL activation under `Xvnc` by keeping `LIBGL_ALWAYS_SOFTWARE=1` enabled alongside `GALLIUM_DRIVER=virpipe` and `MESA_GL_VERSION_OVERRIDE=4.0`.
+- **Zero-Flicker 120Hz Hardware Cursor (`RFC 6143 RichCursor`)**:
+  - Implemented `ENCODING_CURSOR (-239)` in `RfbModels.kt`, `RfbProtocol.kt`, `RfbClient.kt`, and `LinuxDesktopSurface.kt` so X11 cursor shapes decode once into a cached `Bitmap` and render directly on the Android `HardwareCanvas` at 120Hz on every pointer move — completely eliminating cursor disappearing/flickering during mouse movement and 3D rendering.
+  - Restored smooth `<MoveMode>opaque</MoveMode>` window movement in JWM (replacing the hollow wireframe box) and made manual `xrandr` display presets (`960x540 Turbo 3D`, `1280x720`, `1366x768`, `1600x900`) sticky without auto-resize overrides.
+- **Smart Hardware Resource Governor & Full Linux Compatibility**:
+  - Added `LinuxResourceGovernor.kt` probing CPU core count, big.LITTLE cluster frequencies, total/available RAM, and GPU model; synthesizes accurate multi-core `/proc/{stat,uptime,loadavg,version,vmstat,filesystems}` and `/etc/pocketlinux-hardware.env`, and responds to Android `onTrimMemory`.
+  - Mounted writable `/dev/shm` (`/run/shm`) POSIX shared memory inside PRoot for browsers and multimedia apps (`Firefox ESR`, `Chromium`, `MPV`), and added automatic rootfs schema upgrades in `RootfsManager` that preserve `/root/{Documents,Downloads,Projects}` across APK updates.
+
+### Fixed
+- **Fixed `PocketStore` `Failed (99)` & `apk` `"Unable to lock database: temporary error"`**:
+  - Added `/usr/local/sbin/apk` wrapper + `/usr/local/lib/libnoflock.so` shim with bounded `--wait 12 --timeout 25`, automatic first-run `--update-cache`, orphaned `/sbin/apk` lock cleanup, and `flock(2)` bypass fallback when restricted by host filesystems.
+  - Serialized all `PocketStore` `apk` operations with `threading.Lock()`, upgraded `fix-dns.sh` to fast pure-`sh` Cloudflare + Google DoH IPv4 resolution, and replaced missing `aarch64` packages (`dosbox`, `mtpaint`, `netsurf`) with verified dual-ABI Alpine 3.20 packages (`dosbox-staging`, `kolourpaint`, `firefox-esr`, `luakit`, `mpv`, `fastfetch`).
+
 ## [1.1.0] - 2026-11-26
 
 ### Performance

@@ -1,0 +1,92 @@
+#!/bin/sh
+# Resilient APK package manager wrapper for PocketLinux Android (PRoot + SELinux safe).
+# Prevents infinite network hangs, clears orphaned/hung apk locks, and falls back to
+# libnoflock.so if the host Android filesystem rejects flock(2) with EAGAIN/EACCES/ENOLCK.
+set -u
+
+REAL_APK="/sbin/apk"
+NOFLOCK_SO="/usr/local/lib/libnoflock.so"
+
+# Fast-path for read-only / version / info subcommands (zero overhead)
+SUBCMD=""
+for arg in "$@"; do
+    case "$arg" in
+        -*) ;;
+        *) SUBCMD="$arg"; break ;;
+    esac
+done
+
+case "$SUBCMD" in
+    ""|info|version|policy|stats|manifest|audit|dot|verify)
+        exec "$REAL_APK" "$@"
+        ;;
+esac
+
+# Ensure DNS resolves dl-cdn.alpinelinux.org before any repository operation
+if [ -x /usr/local/bin/fix-dns.sh ]; then
+    /usr/local/bin/fix-dns.sh >/dev/null 2>&1 || true
+fi
+
+# Add bounded --wait and --timeout unless caller already supplied them
+EXTRA_FLAGS=""
+case " $* " in
+    *" --wait "*) ;;
+    *) EXTRA_FLAGS="$EXTRA_FLAGS --wait 12" ;;
+esac
+case " $* " in
+    *" --timeout "*) ;;
+    *) EXTRA_FLAGS="$EXTRA_FLAGS --timeout 25" ;;
+esac
+
+# Auto-populate repository index on first 'apk add' or 'apk search' if /var/cache/apk is empty
+if [ "$SUBCMD" = "add" ] || [ "$SUBCMD" = "search" ]; then
+    case " $* " in
+        *" -U "*|*" --update-cache "*|*" --no-cache "*) ;;
+        *)
+            if ! ls /var/cache/apk/APKINDEX.*.tar.gz >/dev/null 2>&1; then
+                EXTRA_FLAGS="$EXTRA_FLAGS --update-cache"
+            fi
+            ;;
+    esac
+fi
+
+# Attempt 1: normal execution with bounded wait & network timeout
+# shellcheck disable=SC2086
+"$REAL_APK" $EXTRA_FLAGS "$@"
+RC=$?
+if [ "$RC" -eq 0 ]; then
+    exit 0
+fi
+
+# Exit code 99 in apk-tools indicates database open/lock failure ("Unable to lock database")
+if [ "$RC" -eq 99 ]; then
+    # Terminate only orphaned /sbin/apk binaries (never our own PID or parent shell)
+    for pid_dir in /proc/[0-9]*; do
+        pid="${pid_dir#/proc/}"
+        [ "$pid" = "$$" ] && continue
+        [ "$pid" = "${PPID:-0}" ] && continue
+        exe_name="$(tr '\0' ' ' < "$pid_dir/cmdline" 2>/dev/null || true)"
+        case "$exe_name" in
+            /sbin/apk\ *|/sbin/apk)
+                kill -TERM "$pid" 2>/dev/null || true
+                sleep 0.3
+                kill -KILL "$pid" 2>/dev/null || true
+                ;;
+        esac
+    done
+    rm -f /lib/apk/db/lock 2>/dev/null || true
+
+    # Attempt 2: retry after cleaning orphaned lock
+    # shellcheck disable=SC2086
+    "$REAL_APK" $EXTRA_FLAGS "$@" && exit 0
+    RC=$?
+
+    # Attempt 3: if host filesystem itself blocks flock(2), use libnoflock.so shim
+    if [ "$RC" -eq 99 ] && [ -r "$NOFLOCK_SO" ]; then
+        # shellcheck disable=SC2086
+        LD_PRELOAD="${NOFLOCK_SO}${LD_PRELOAD:+:$LD_PRELOAD}" "$REAL_APK" $EXTRA_FLAGS "$@"
+        exit $?
+    fi
+fi
+
+exit "$RC"

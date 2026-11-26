@@ -98,8 +98,26 @@ textview, textview text {
 }
 """
 
-# Curated popular Linux apps with automatic companion libraries so nothing breaks
+# Curated popular Linux apps verified across BOTH aarch64 and x86_64 in Alpine 3.20
 FEATURED_APPS = [
+    {
+        "name": "Firefox ESR Browser",
+        "category": "Internet",
+        "desc": "Full desktop Mozilla Firefox web browser with HTML5, extensions & DevTools.",
+        "packages": ["firefox-esr"],
+        "extra_deps": ["ttf-dejavu"],
+        "launch": "firefox --no-remote",
+        "binary": "firefox",
+    },
+    {
+        "name": "Luakit Fast Browser",
+        "category": "Internet",
+        "desc": "Ultra-fast, lightweight WebKitGTK browser with minimal RAM footprint.",
+        "packages": ["luakit"],
+        "extra_deps": [],
+        "launch": "luakit",
+        "binary": "luakit",
+    },
     {
         "name": "Geany IDE",
         "category": "Development",
@@ -119,13 +137,22 @@ FEATURED_APPS = [
         "binary": "gimp",
     },
     {
-        "name": "NetSurf Browser",
-        "category": "Internet",
-        "desc": "Ultra-fast, low-RAM web browser designed for lightweight Linux desktops.",
-        "packages": ["netsurf"],
+        "name": "KolourPaint",
+        "category": "Graphics",
+        "desc": "Easy-to-use paint and pixel drawing program (classic Paint experience).",
+        "packages": ["kolourpaint"],
         "extra_deps": [],
-        "launch": "netsurf",
-        "binary": "netsurf",
+        "launch": "kolourpaint",
+        "binary": "kolourpaint",
+    },
+    {
+        "name": "MPV Media Player",
+        "category": "Graphics",
+        "desc": "Hardware-capable video and audio player supporting MP4, MKV, WebM, and streams.",
+        "packages": ["mpv"],
+        "extra_deps": ["ffmpeg"],
+        "launch": "mpv --player-operation-mode=pseudo-gui",
+        "binary": "mpv",
     },
     {
         "name": "AbiWord",
@@ -155,18 +182,9 @@ FEATURED_APPS = [
         "binary": "mupdf",
     },
     {
-        "name": "mtPaint",
-        "category": "Graphics",
-        "desc": "Super lightweight pixel-art and photo painting tool.",
-        "packages": ["mtpaint"],
-        "extra_deps": [],
-        "launch": "mtpaint",
-        "binary": "mtpaint",
-    },
-    {
         "name": "Node.js & npm",
         "category": "Development",
-        "desc": "JavaScript runtime for OpenClaw, CLI AI agents, and web servers.",
+        "desc": "JavaScript runtime for CLI AI agents, full-stack tools, and web servers.",
         "packages": ["nodejs", "npm"],
         "extra_deps": ["git"],
         "launch": "xterm -fa 'DejaVu Sans Mono' -fs 12 -bg '#0F172A' -fg '#E2E8F0' -e sh -c 'node -v; npm -v; exec bash -l'",
@@ -184,20 +202,29 @@ FEATURED_APPS = [
     {
         "name": "SuperTux",
         "category": "Games",
-        "desc": "Classic 2D jump-and-run platformer game (great graphics & audio test).",
+        "desc": "Classic 2D jump-and-run platformer game (great VirGL GPU test).",
         "packages": ["supertux"],
         "extra_deps": [],
         "launch": "supertux2",
         "binary": "supertux2",
     },
     {
-        "name": "DOSBox",
+        "name": "DOSBox Staging",
         "category": "Games",
-        "desc": "x86 DOS emulator for running classic retro games and programs.",
-        "packages": ["dosbox"],
+        "desc": "Modernized x86 DOS emulator for classic retro PC games and software.",
+        "packages": ["dosbox-staging"],
         "extra_deps": [],
         "launch": "dosbox",
         "binary": "dosbox",
+    },
+    {
+        "name": "Fastfetch System Info",
+        "category": "System",
+        "desc": "Blazing-fast C system & hardware neofetch dashboard in terminal.",
+        "packages": ["fastfetch"],
+        "extra_deps": [],
+        "launch": "xterm -fa 'DejaVu Sans Mono' -fs 11 -bg '#0F172A' -fg '#E2E8F0' -hold -e fastfetch",
+        "binary": "fastfetch",
     },
     {
         "name": "3D GPU Demos (glxgears)",
@@ -218,6 +245,7 @@ class PocketStoreWindow(Gtk.Window):
         self.set_position(Gtk.WindowPosition.CENTER)
 
         self.busy = False
+        self.apk_lock = threading.Lock()
         self.last_apk_update = 0.0
         self.active_category = "All"
 
@@ -451,23 +479,36 @@ class PocketStoreWindow(Gtk.Window):
         self.search_results_box.show_all()
 
         def worker() -> None:
-            if time.time() - self.last_apk_update > 3600:
-                subprocess.run(["apk", "update"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                self.last_apk_update = time.time()
-            res = subprocess.run(
-                ["apk", "search", "-v", query],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=30,
-            )
+            with self.apk_lock:
+                subprocess.run(["/usr/local/bin/fix-dns.sh"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                if time.time() - self.last_apk_update > 3600:
+                    try:
+                        subprocess.run(
+                            ["apk", "--wait", "10", "--timeout", "20", "update"],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            timeout=30,
+                        )
+                        self.last_apk_update = time.time()
+                    except Exception:
+                        pass
+                try:
+                    res = subprocess.run(
+                        ["apk", "--wait", "10", "--timeout", "20", "search", "-v", query],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        timeout=30,
+                    )
+                    out_lines = res.stdout.splitlines()
+                except Exception:
+                    out_lines = []
             items = []
             seen = set()
-            for line in res.stdout.splitlines():
+            for line in out_lines:
                 if " - " not in line:
                     continue
                 pkg_ver, desc = line.split(" - ", 1)
-                # Strip -version-rX from package name
                 parts = pkg_ver.strip().split("-")
                 pkg_name = pkg_ver.strip()
                 for idx in range(len(parts) - 1, 0, -1):
@@ -542,16 +583,20 @@ class PocketStoreWindow(Gtk.Window):
         self._append_log(f"\n=== {title} ===\n$ {shell_cmd}\n")
 
         def worker() -> None:
-            proc = subprocess.Popen(
-                ["/bin/sh", "-c", shell_cmd],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-            )
-            assert proc.stdout is not None
-            for line in proc.stdout:
-                GLib.idle_add(self._append_log, line)
-            code = proc.wait()
+            with self.apk_lock:
+                env = os.environ.copy()
+                env["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+                proc = subprocess.Popen(
+                    ["/bin/sh", "-c", shell_cmd],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    env=env,
+                )
+                assert proc.stdout is not None
+                for line in proc.stdout:
+                    GLib.idle_add(self._append_log, line)
+                code = proc.wait()
             if code == 0:
                 msg = f"Completed: {title}"
             else:
@@ -566,9 +611,11 @@ class PocketStoreWindow(Gtk.Window):
 
     def _install_packages(self, packages: list, display_name: str) -> None:
         quoted = " ".join(shlex.quote(p) for p in packages)
-        # Auto-update index + upgrade shared libs + fix any missing dependencies automatically
-        cmd = f"/usr/local/bin/fix-dns.sh 2>/dev/null || true; apk update && apk add --upgrade {quoted} && apk fix"
-        self.last_apk_update = time.time()
+        if time.time() - self.last_apk_update > 1800:
+            cmd = f"apk update && apk add --upgrade {quoted}"
+            self.last_apk_update = time.time()
+        else:
+            cmd = f"apk add --upgrade {quoted} || (apk update && apk add --upgrade {quoted})"
         self._run_apk_pipeline(f"Installing {display_name}", cmd)
 
     def _remove_packages(self, packages: list, display_name: str) -> None:
@@ -578,7 +625,10 @@ class PocketStoreWindow(Gtk.Window):
 
     def _run_repair_all(self) -> None:
         self.last_apk_update = time.time()
-        self._run_apk_pipeline("Updating & Repairing All Libraries", "/usr/local/bin/fix-dns.sh 2>/dev/null || true; apk update && apk upgrade && apk fix")
+        self._run_apk_pipeline(
+            "Unlocking DB, Updating & Repairing All Libraries",
+            "rm -f /lib/apk/db/lock 2>/dev/null || true; apk update && apk upgrade && apk fix",
+        )
 
     def _launch_command(self, cmd: str, name: str) -> None:
         self.status_label.set_text(f"Launching {name}...")

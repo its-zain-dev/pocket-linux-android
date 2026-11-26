@@ -41,6 +41,11 @@ class RfbClient(
         get() = activeFramebuffer.height
 
     val frameGeneration = AtomicLong(0L)
+    val cursorGeneration = AtomicLong(0L)
+
+    @Volatile
+    var cursorShape: RfbCursorShape? = null
+        private set
 
     private class CoalescedMoveSlot(
         var x: Int,
@@ -506,6 +511,22 @@ class RfbClient(
                             height = height,
                             serverName = currentServerName
                         )
+                    }
+                }
+
+                override fun onCursorShapeUpdated(cursor: RfbCursorShape) {
+                    val active = synchronized(lifecycleLock) {
+                        if (connectionGeneration != gen) {
+                            false
+                        } else {
+                            cursorShape = cursor
+                            cursorGeneration.incrementAndGet()
+                            true
+                        }
+                    }
+                    if (!active) return
+                    for (cb in frameListeners) {
+                        cb()
                     }
                 }
 

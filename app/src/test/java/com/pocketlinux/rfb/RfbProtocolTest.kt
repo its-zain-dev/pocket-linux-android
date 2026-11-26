@@ -587,6 +587,80 @@ class RfbProtocolTest {
     }
 
     @Test
+    fun richCursorPseudoEncodingDecodesPixelsTransparencyBitmaskAndHiddenCursor() {
+        val fb = RfbFramebuffer()
+        fb.resize(16, 16)
+
+        val baos = ByteArrayOutputStream()
+        val out = DataOutputStream(baos)
+        out.writeByte(RfbConstants.SMSG_FB_UPDATE)
+        out.writeByte(0)
+        out.writeShort(2)
+
+        // Rect 1: 2x2 RichCursor with hotspot (1, 0)
+        out.writeShort(1)
+        out.writeShort(0)
+        out.writeShort(2)
+        out.writeShort(2)
+        out.writeInt(RfbConstants.ENCODING_CURSOR)
+        // 4 pixels in BGRX: (0x112233), (0x445566), (0x778899), (0xAABBCC)
+        out.write(
+            byteArrayOf(
+                0x33, 0x22, 0x11, 0x00,
+                0x66, 0x55, 0x44, 0x00,
+                0x99.toByte(), 0x88.toByte(), 0x77, 0x00,
+                0xCC.toByte(), 0xBB.toByte(), 0xAA.toByte(), 0x00
+            )
+        )
+        // Row 0 bitmask: 1000_0000 (pixel 0 opaque, pixel 1 transparent) -> 0x80
+        // Row 1 bitmask: 0100_0000 (pixel 0 transparent, pixel 1 opaque) -> 0x40
+        out.writeByte(0x80)
+        out.writeByte(0x40)
+
+        // Rect 2: 0x0 RichCursor (invisible cursor)
+        out.writeShort(0)
+        out.writeShort(0)
+        out.writeShort(0)
+        out.writeShort(0)
+        out.writeInt(RfbConstants.ENCODING_CURSOR)
+        out.flush()
+
+        val receivedCursors = mutableListOf<RfbCursorShape>()
+        var fbUpdates = 0
+        RfbProtocol().use { proto ->
+            proto.readServerMessage(
+                DataInputStream(ByteArrayInputStream(baos.toByteArray())),
+                fb,
+                object : RfbProtocol.ServerMessageListener {
+                    override fun onCursorShapeUpdated(cursor: RfbCursorShape) {
+                        receivedCursors.add(cursor)
+                    }
+
+                    override fun onFramebufferUpdated(resized: Boolean) {
+                        fbUpdates++
+                    }
+                }
+            )
+        }
+
+        assertEquals(1, fbUpdates)
+        assertEquals(2, receivedCursors.size)
+        val first = receivedCursors[0]
+        assertEquals(2, first.width)
+        assertEquals(2, first.height)
+        assertEquals(1, first.hotX)
+        assertEquals(0, first.hotY)
+        assertEquals(0xFF112233.toInt(), first.pixels[0])
+        assertEquals(0x00000000, first.pixels[1])
+        assertEquals(0x00000000, first.pixels[2])
+        assertEquals(0xFFAABBCC.toInt(), first.pixels[3])
+        val hidden = receivedCursors[1]
+        assertEquals(0, hidden.width)
+        assertEquals(0, hidden.height)
+        assertEquals(0, hidden.pixels.size)
+    }
+
+    @Test
     fun rfbConnectionStateAndTouchInputModeMatchContract() {
         assertEquals("Disconnected", RfbConnectionState.Disconnected.toString())
         assertEquals("Connecting", RfbConnectionState.Connecting.toString())
