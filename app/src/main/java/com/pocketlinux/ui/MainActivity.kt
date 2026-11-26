@@ -3,8 +3,11 @@ package com.pocketlinux.ui
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.Settings
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
@@ -89,11 +92,24 @@ class MainActivity : ComponentActivity() {
 
     private val fallbackRfbClient by lazy { RfbClient() }
     private var isImmersiveFullscreenActive: Boolean = true
+    private var lastKnownStorageGranted: Boolean = false
+    private val storagePermissionState = mutableStateOf(false)
 
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { _ ->
         // Runtime service continues regardless of notification permission outcome.
+    }
+
+    private val legacyStoragePermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        val granted = results.values.any { it } || hasPhoneStorageAccess()
+        storagePermissionState.value = granted
+        if (granted && !lastKnownStorageGranted) {
+            lastKnownStorageGranted = true
+            LinuxRuntimeService.serviceInstance.value?.restartRuntime()
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -111,14 +127,27 @@ class MainActivity : ComponentActivity() {
         }
         applyImmersiveFullscreen(true)
 
+        LinuxRuntimeService.clearShutdownFlag()
+        lastKnownStorageGranted = hasPhoneStorageAccess()
+        storagePermissionState.value = lastKnownStorageGranted
+
         requestNotificationPermissionIfNeeded()
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R && !lastKnownStorageGranted) {
+            requestPhoneStorageAccess()
+        }
         ensureRuntimeServiceStarted()
 
         setContent {
             PocketLinuxTheme {
                 PocketLinuxMainScreen(
                     fallbackRfbClient = fallbackRfbClient,
-                    onRestartRuntime = { ensureRuntimeServiceStarted() },
+                    hasPhoneStoragePermission = storagePermissionState.value,
+                    onRequestPhoneStoragePermission = { requestPhoneStorageAccess() },
+                    onRestartRuntime = {
+                        val svc = LinuxRuntimeService.serviceInstance.value
+                        if (svc != null) svc.restartRuntime() else ensureRuntimeServiceStarted()
+                    },
+                    onExitApp = { exitPocketLinux() },
                     onImmersiveFullscreenChanged = { enabled ->
                         applyImmersiveFullscreen(enabled)
                     }
@@ -129,13 +158,60 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        ensureRuntimeServiceStarted()
+        if (!LinuxRuntimeService.shutdownRequested.value) {
+            ensureRuntimeServiceStarted()
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val nowGranted = hasPhoneStorageAccess()
+        storagePermissionState.value = nowGranted
+        if (nowGranted && !lastKnownStorageGranted) {
+            lastKnownStorageGranted = true
+            LinuxRuntimeService.serviceInstance.value?.restartRuntime()
+        }
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) {
             applyImmersiveFullscreen(isImmersiveFullscreenActive)
+        }
+    }
+
+    private fun hasPhoneStorageAccess(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            runCatching { Environment.isExternalStorageManager() }.getOrDefault(false)
+        } else {
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.READ_EXTERNAL_STORAGE
+            ) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    private fun requestPhoneStorageAccess() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            runCatching {
+                val intent = Intent(
+                    Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                    Uri.parse("package:$packageName")
+                )
+                startActivity(intent)
+            }.onFailure {
+                runCatching {
+                    startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                }
+            }
+        } else {
+            val perms = mutableListOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+            if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.Q) {
+                perms.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            }
+            runCatching {
+                legacyStoragePermissionLauncher.launch(perms.toTypedArray())
+            }
         }
     }
 
@@ -183,19 +259,41 @@ class MainActivity : ComponentActivity() {
             runCatching { startService(intent) }
         }
     }
+
+    private fun exitPocketLinux() {
+        val svc = LinuxRuntimeService.serviceInstance.value
+        if (svc != null) {
+            runCatching { svc.shutdownAndExit() }
+        } else {
+            runCatching {
+                stopService(Intent(this, LinuxRuntimeService::class.java))
+            }
+        }
+        runCatching { finishAndRemoveTask() }.onFailure { finish() }
+    }
 }
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun PocketLinuxMainScreen(
     fallbackRfbClient: RfbClient,
+    hasPhoneStoragePermission: Boolean,
+    onRequestPhoneStoragePermission: () -> Unit,
     onRestartRuntime: () -> Unit,
+    onExitApp: () -> Unit,
     onImmersiveFullscreenChanged: (Boolean) -> Unit
 ) {
     val service by LinuxRuntimeService.serviceInstance.collectAsState()
     val sharedRfb by LinuxRuntimeService.sharedRfbClient.collectAsState()
     val sharedTerminal by LinuxRuntimeService.sharedTerminalSession.collectAsState()
+    val shutdownRequested by LinuxRuntimeService.shutdownRequested.collectAsState()
     val scope = rememberCoroutineScope()
+
+    LaunchedEffect(shutdownRequested) {
+        if (shutdownRequested) {
+            onExitApp()
+        }
+    }
 
     val activeRfbController = sharedRfb ?: fallbackRfbClient
     val connectionState by activeRfbController.connectionState.collectAsState()
@@ -207,12 +305,23 @@ private fun PocketLinuxMainScreen(
     var fullscreenEnabled by remember { mutableStateOf(true) }
     var menuExpanded by remember { mutableStateOf(false) }
     var touchMode by remember { mutableStateOf(TouchInputMode.DIRECT_TAP) }
+    var dragLocked by remember { mutableStateOf(false) }
+    var showQuickControls by remember { mutableStateOf(false) }
+    var phoneStorageHidden by remember(service) { mutableStateOf(service?.isPhoneStorageHidden() ?: false) }
+    var lastCursorX by remember { mutableIntStateOf(-1) }
+    var lastCursorY by remember { mutableIntStateOf(-1) }
     var softKeyboardTrigger by remember { mutableIntStateOf(0) }
 
     val isDesktopImmersive = selectedTab == 0 && fullscreenEnabled
 
     LaunchedEffect(isDesktopImmersive) {
         onImmersiveFullscreenChanged(isDesktopImmersive)
+    }
+
+    LaunchedEffect(menuExpanded, service) {
+        if (menuExpanded && service != null) {
+            phoneStorageHidden = service!!.isPhoneStorageHidden()
+        }
     }
 
     suspend fun refreshMetricsNow(): SystemMetrics? {
@@ -252,9 +361,17 @@ private fun PocketLinuxMainScreen(
         softKeyboardTrigger++
     }
 
-    val sendRightClickCenter: () -> Unit = {
-        val cx = (activeRfbController.desktopWidth / 2).coerceAtLeast(1)
-        val cy = (activeRfbController.desktopHeight / 2).coerceAtLeast(1)
+    val sendRightClickAtCursor: () -> Unit = {
+        val cx = if (lastCursorX in 0 until activeRfbController.desktopWidth) {
+            lastCursorX
+        } else {
+            (activeRfbController.desktopWidth / 2).coerceAtLeast(1)
+        }
+        val cy = if (lastCursorY in 0 until activeRfbController.desktopHeight) {
+            lastCursorY
+        } else {
+            (activeRfbController.desktopHeight / 2).coerceAtLeast(1)
+        }
         scope.launch {
             activeRfbController.sendPointerEvent(cx, cy, RfbConstants.BUTTON_RIGHT)
             delay(45L)
@@ -312,6 +429,13 @@ private fun PocketLinuxMainScreen(
                         runtimeState = runtimeState,
                         softKeyboardTrigger = softKeyboardTrigger,
                         touchMode = touchMode,
+                        dragLocked = dragLocked,
+                        showQuickControls = showQuickControls,
+                        onCursorMoved = { x, y ->
+                            lastCursorX = x
+                            lastCursorY = y
+                        },
+                        onToggleDragLock = { dragLocked = !dragLocked },
                         onToggleTouchMode = toggleTouchMode,
                         onRequestKeyboard = requestKeyboard,
                         onRestartRuntime = onRestartRuntime,
@@ -364,6 +488,7 @@ private fun PocketLinuxMainScreen(
                                 runtimeController = service,
                                 runtimeState = runtimeState,
                                 latestMetrics = latestMetrics,
+                                rootfsDir = service?.getRootfsDir(),
                                 onRefreshMetrics = { refreshMetricsNow() },
                                 onLaunchAppAndSwitchToDesktop = launchAppAndSwitchToDesktop,
                                 onSwitchToDesktop = { selectedTab = 0 }
@@ -414,19 +539,42 @@ private fun PocketLinuxMainScreen(
                     latestMetrics = latestMetrics,
                     selectedTab = selectedTab,
                     touchMode = touchMode,
+                    dragLocked = dragLocked,
+                    showQuickControls = showQuickControls,
                     fullscreenEnabled = fullscreenEnabled,
+                    hasPhoneStoragePermission = hasPhoneStoragePermission,
+                    phoneStorageHidden = phoneStorageHidden,
                     onSelectTab = { tab ->
                         selectedTab = tab
                         menuExpanded = false
                     },
                     onRequestKeyboard = requestKeyboard,
                     onToggleTouchMode = toggleTouchMode,
+                    onToggleDragLock = {
+                        dragLocked = !dragLocked
+                        menuExpanded = false
+                    },
+                    onToggleQuickControls = {
+                        showQuickControls = !showQuickControls
+                        menuExpanded = false
+                    },
                     onRightClick = {
                         menuExpanded = false
-                        sendRightClickCenter()
+                        sendRightClickAtCursor()
                     },
                     onLaunchStore = { launchAppAndSwitchToDesktop("pocketlinux-store.py") },
+                    onLaunchDownloads = { launchAppAndSwitchToDesktop("pocketlinux-downloads.py") },
                     onLaunchSettings = { launchAppAndSwitchToDesktop("pocketlinux-settings.py") },
+                    onRequestPhoneStoragePermission = {
+                        menuExpanded = false
+                        onRequestPhoneStoragePermission()
+                    },
+                    onTogglePhoneStorageHidden = {
+                        val nextHidden = !phoneStorageHidden
+                        phoneStorageHidden = nextHidden
+                        service?.setPhoneStorageHidden(nextHidden)
+                        menuExpanded = false
+                    },
                     onToggleFullscreen = { fullscreenEnabled = !fullscreenEnabled },
                     onReconnect = {
                         activeRfbController.connect(
@@ -438,6 +586,10 @@ private fun PocketLinuxMainScreen(
                     onRestartRuntime = {
                         onRestartRuntime()
                         menuExpanded = false
+                    },
+                    onExitApp = {
+                        menuExpanded = false
+                        onExitApp()
                     }
                 )
             }
@@ -648,16 +800,26 @@ private fun FloatingControlDrawer(
     latestMetrics: SystemMetrics?,
     selectedTab: Int,
     touchMode: TouchInputMode,
+    dragLocked: Boolean,
+    showQuickControls: Boolean,
     fullscreenEnabled: Boolean,
+    hasPhoneStoragePermission: Boolean,
+    phoneStorageHidden: Boolean,
     onSelectTab: (Int) -> Unit,
     onRequestKeyboard: () -> Unit,
     onToggleTouchMode: () -> Unit,
+    onToggleDragLock: () -> Unit,
+    onToggleQuickControls: () -> Unit,
     onRightClick: () -> Unit,
     onLaunchStore: () -> Unit,
+    onLaunchDownloads: () -> Unit,
     onLaunchSettings: () -> Unit,
+    onRequestPhoneStoragePermission: () -> Unit,
+    onTogglePhoneStorageHidden: () -> Unit,
     onToggleFullscreen: () -> Unit,
     onReconnect: () -> Unit,
-    onRestartRuntime: () -> Unit
+    onRestartRuntime: () -> Unit,
+    onExitApp: () -> Unit
 ) {
     val statusText = when (runtimeState) {
         is RuntimeState.Idle -> "Linux: Idle"
@@ -680,7 +842,7 @@ private fun FloatingControlDrawer(
         border = BorderStroke(1.dp, PocketLinuxColors.Border),
         shadowElevation = 12.dp,
         modifier = Modifier
-            .widthIn(min = 270.dp, max = 330.dp)
+            .widthIn(min = 270.dp, max = 335.dp)
     ) {
         Column(
             modifier = Modifier
@@ -766,6 +928,16 @@ private fun FloatingControlDrawer(
                     onClick = onToggleTouchMode
                 )
                 DrawerChip(
+                    label = if (dragLocked) "✋ Drag: ON" else "✋ Drag Lock",
+                    active = dragLocked,
+                    onClick = onToggleDragLock
+                )
+                DrawerChip(
+                    label = if (showQuickControls) "🎮 Touch Bar: ON" else "🎮 Touch Bar",
+                    active = showQuickControls,
+                    onClick = onToggleQuickControls
+                )
+                DrawerChip(
                     label = "Right Click",
                     onClick = onRightClick
                 )
@@ -774,8 +946,24 @@ private fun FloatingControlDrawer(
                     onClick = onLaunchStore
                 )
                 DrawerChip(
-                    label = "⚙ GPU & Settings",
+                    label = "⬇ Downloads",
+                    onClick = onLaunchDownloads
+                )
+                DrawerChip(
+                    label = "⚙ Settings",
                     onClick = onLaunchSettings
+                )
+                if (!hasPhoneStoragePermission) {
+                    DrawerChip(
+                        label = "📁 Grant Phone Files",
+                        active = true,
+                        onClick = onRequestPhoneStoragePermission
+                    )
+                }
+                DrawerChip(
+                    label = if (phoneStorageHidden) "🔒 Phone Files: Empty" else "📂 Phone Files: Shown",
+                    active = phoneStorageHidden,
+                    onClick = onTogglePhoneStorageHidden
                 )
                 DrawerChip(
                     label = if (fullscreenEnabled) "Fullscreen: ON" else "Fullscreen: OFF",
@@ -789,6 +977,12 @@ private fun FloatingControlDrawer(
                 DrawerChip(
                     label = "Restart Linux",
                     onClick = onRestartRuntime
+                )
+                DrawerChip(
+                    label = "⏻ Exit & Stop",
+                    danger = true,
+                    tag = "drawer_exit_btn",
+                    onClick = onExitApp
                 )
             }
 
@@ -814,13 +1008,26 @@ private fun FloatingControlDrawer(
 private fun DrawerChip(
     label: String,
     active: Boolean = false,
+    danger: Boolean = false,
     tag: String? = null,
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
-    val bg = if (active) PocketLinuxColors.CyanContainer else PocketLinuxColors.SurfaceElevated
-    val border = if (active) PocketLinuxColors.Cyan.copy(alpha = 0.7f) else PocketLinuxColors.Border
-    val fg = if (active) PocketLinuxColors.Cyan else PocketLinuxColors.TextPrimary
+    val bg = when {
+        danger -> PocketLinuxColors.Rose.copy(alpha = 0.20f)
+        active -> PocketLinuxColors.CyanContainer
+        else -> PocketLinuxColors.SurfaceElevated
+    }
+    val border = when {
+        danger -> PocketLinuxColors.Rose.copy(alpha = 0.75f)
+        active -> PocketLinuxColors.Cyan.copy(alpha = 0.7f)
+        else -> PocketLinuxColors.Border
+    }
+    val fg = when {
+        danger -> PocketLinuxColors.Rose
+        active -> PocketLinuxColors.Cyan
+        else -> PocketLinuxColors.TextPrimary
+    }
     val mod = modifier
         .height(34.dp)
         .clip(RoundedCornerShape(10.dp))

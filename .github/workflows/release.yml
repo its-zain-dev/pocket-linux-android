@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag name (e.g. v2.0.0)'
+        description: 'Release tag name (e.g. v2.1.0)'
         required: true
-        default: 'v2.0.0'
+        default: 'v2.1.0'
 
 permissions:
   contents: write
@@ -57,7 +57,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: app/src/main/jniLibs
-          key: ${{ runner.os }}-proot-virgl-v3-${{ hashFiles('scripts/ci/build-proot.sh', 'scripts/ci/build-virgl.sh') }}
+          key: ${{ runner.os }}-proot-virgl-v4-${{ hashFiles('scripts/ci/build-proot.sh', 'scripts/ci/build-virgl.sh') }}
 
       - name: Build PRoot & unbundled loader (arm64-v8a & x86_64)
         run: bash scripts/ci/build-proot.sh --skip-existing
@@ -71,7 +71,7 @@ jobs:
           path: |
             app/src/arm64/assets/rootfs-arm64-v8a.tar.gz
             app/src/x86_64/assets/rootfs-x86_64.tar.gz
-          key: ${{ runner.os }}-rootfs-v3.20-v3-${{ hashFiles('scripts/ci/build-rootfs.sh', 'scripts/ci/rootfs-overlay/**') }}
+          key: ${{ runner.os }}-rootfs-v3.20-v4-${{ hashFiles('scripts/ci/build-rootfs.sh', 'scripts/ci/rootfs-overlay/**') }}
 
       - name: Build Alpine v3.20 rootfs tarballs (aarch64 & x86_64)
         run: bash scripts/ci/build-rootfs.sh --skip-existing
@@ -115,14 +115,16 @@ jobs:
           body: |
             ## PocketLinux ${{ steps.meta.outputs.tag }}
 
-            Self-contained, rootless **Alpine Linux 3.20** fullscreen desktop, hardware-accelerated OpenGL 4.0 GPU engine, and smart resource governor for Android — no root, no Termux, and no external VNC app required.
+            Self-contained, rootless **Alpine Linux 3.20** fullscreen desktop, Adreno/Mali hardware-accelerated VirGL GPU engine, standalone multi-stream Download Manager, movable Windows-style Desktop, and Windows-11-inspired Settings Center for Android — no root, no Termux, and no external VNC app required.
 
             ### What's New in ${{ steps.meta.outputs.tag }}
-            - **Real Hardware GPU Acceleration (`libvirgl_test_server.so`)**: Native Android EGL (`Adreno 5xx/6xx/7xx`, `Mali`, `PowerVR`, `Xclipse`) VirGL 3D server with Pbuffer + Surfaceless support and zero-copy shared-memory (`mmap`) frame transfer — eliminates fullscreen `glxgears` / 3D FPS drops.
-            - **Zero-Flicker 120Hz Hardware Cursor (`RFC 6143 RichCursor`)**: Decodes X11 cursor shapes directly onto the Android `HardwareCanvas` at 120Hz, completely eliminating mouse cursor flickering/disappearing during motion and 3D rendering, plus smooth opaque window dragging.
-            - **Smart Hardware Resource Governor & Full Linux Compatibility**: Auto-probes big.LITTLE CPU clusters, RAM, and GPU (`LinuxResourceGovernor`), exposes multi-core SELinux-safe `/proc` + writable `/dev/shm` POSIX shared memory (needed by Firefox, Chromium, MPV, Electron), and auto-upgrades existing installations while preserving `/root/{Documents,Downloads,Projects}`.
-            - **Bulletproof `PocketStore` & Lock-Free `apk` Installer**: Fixes `Failed (99)` / `Unable to lock database: temporary error` via bounded timeouts, serialized store queues, orphaned lock recovery, `libnoflock.so` fallback, multi-provider Cloudflare + Google DoH DNS, and verified dual-ABI (`arm64` + `x86_64`) store packages (`Firefox ESR`, `KolourPaint`, `DOSBox Staging`, `MPV`, `GIMP`, `Geany`, `GCC`, `Node.js`).
-            - **Sticky `xrandr` Display Presets**: Switch instantly between `960x540 (Turbo 3D)`, `1280x720`, `1366x768`, and `1600x900` without auto-resize reverting your choice.
+            - **Adreno 5xx/6xx/7xx & Mali VirGL 3D Crash Fix**: Rebuilt `libvirgl_test_server.so` with official Android EGL/GLES 3 patches (disables `feat_dual_src_blend` on Android, uses 1×1 Pbuffer context + safe `memfd`/`ashmem` SHM negotiation + live `virgl_server.log` diagnostics) — eliminates the 1-second black-screen crash in `glxgears` and 3D apps.
+            - **Android Native Network & DNS Bridge (`127.0.0.1:18080`)**: Routes browser and package traffic cleanly through Android's native resolver whenever Private DNS/VPN/carrier blocks UDP 53, plus PRoot-safe sandbox flags for **Firefox ESR**, **Chromium**, and **Luakit**.
+            - **Standalone Background Download Manager (`Downloads`) & Upgraded `PocketStore`**: Detached `pocketlinux-pkgd` daemon keeps downloads running in the background even after closing PocketStore, syncs live across multiple windows, accelerates downloads with parallel multi-stream fetching (0%–100% progress + live speed), lets you install multiple apps at once, and includes a working live Log Viewer in both Store and Downloads.
+            - **Movable Windows-Style Desktop & Automatic App Sync**: Every app installed from PocketStore automatically appears on your **Desktop** (freely movable via drag-and-drop with snap-to-grid or free placement), **Start Menu → Installed Apps**, **File Manager → Applications**, and the Android **Apps & System** tab.
+            - **Phone Storage Access + Privacy Mode Toggle**: Added proper Android storage permission grants so `/mnt/phone` shows your device files, PLUS a **Privacy Mode (`Hide Phone Files`)** toggle in both Android's floating menu and Linux Settings to make `/mnt/phone` appear completely empty on demand.
+            - **Windows-11-Inspired Settings Center**: 8-section sidebar redesign with live Accent Colors, 4 built-in Wallpapers + custom image picker, customizable Taskbar position/size/clock/auto-hide, Desktop icon size & arrangement tools, DPI scaling, GPU diagnostics, Network Bridge control, and Privacy Mode.
+            - **Upgraded Touch Controls & Clean Exit (`⏻ Exit & Stop`)**: Added touch double-tap snapping, **Drag Lock** chip for effortless window & desktop-icon dragging, optional floating **Quick Touch Bar**, real-cursor Right Click, plus clean full shutdown via the red **`⏻ Exit & Stop`** drawer button, the **`Exit & Stop`** notification action, or swiping PocketLinux away from Android Recents.
 
             ### Downloads
             - **Phones & Tablets (64-bit ARM)**: `PocketLinux-${{ steps.meta.outputs.tag }}-arm64-v8a.apk`

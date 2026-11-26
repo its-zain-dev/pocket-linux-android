@@ -250,6 +250,7 @@ class TouchInputController(
     private val scrollStepPx: Float = 24f,
     private val trackpadSensitivity: Float = 1.0f,
     private val enableAcceleration: Boolean = false,
+    private val snapDoubleTap: Boolean = false,
     private val onPointerEvent: (x: Int, y: Int, buttonMask: Int) -> Unit
 ) {
     private enum class GestureState {
@@ -269,6 +270,17 @@ class TouchInputController(
         }
 
     @Volatile
+    var dragLocked: Boolean = false
+        set(value) {
+            if (field != value) {
+                field = value
+                if (cursorX >= 0 && cursorY >= 0) {
+                    onPointerEvent(cursorX, cursorY, if (value) RfbConstants.BUTTON_LEFT else 0)
+                }
+            }
+        }
+
+    @Volatile
     var cursorX: Int = -1
         private set
 
@@ -277,7 +289,7 @@ class TouchInputController(
         private set
 
     val isDragging: Boolean
-        get() = state == GestureState.DRAGGING
+        get() = state == GestureState.DRAGGING || dragLocked
 
     private var state = GestureState.IDLE
     private val activePointers = LinkedHashMap<Int, Pair<Float, Float>>()
@@ -296,6 +308,9 @@ class TouchInputController(
     private var trackpadMoved = false
     private var doubleTapCandidate = false
     private var lastTapUpTimeMs = 0L
+    private var lastDirectTapTimeMs = 0L
+    private var lastDirectTapX = -1
+    private var lastDirectTapY = -1
 
     private var accumX = 0f
     private var accumY = 0f
@@ -338,12 +353,22 @@ class TouchInputController(
 
         if (mode == TouchInputMode.DIRECT_TAP) {
             val pt = viewToDesktop(x, y, viewWidth, viewHeight, desktopWidth, desktopHeight) ?: return
-            cursorX = pt.x
-            cursorY = pt.y
-            downDesktopX = pt.x
-            downDesktopY = pt.y
+            var targetX = pt.x
+            var targetY = pt.y
+            if (snapDoubleTap &&
+                (nowMs - lastDirectTapTimeMs) in 1L..450L &&
+                lastDirectTapX >= 0 && lastDirectTapY >= 0 &&
+                hypot((pt.x - lastDirectTapX).toFloat(), (pt.y - lastDirectTapY).toFloat()) <= 28f
+            ) {
+                targetX = lastDirectTapX
+                targetY = lastDirectTapY
+            }
+            cursorX = targetX
+            cursorY = targetY
+            downDesktopX = targetX
+            downDesktopY = targetY
             state = GestureState.PENDING_TAP
-            onPointerEvent(cursorX, cursorY, 0)
+            onPointerEvent(cursorX, cursorY, if (dragLocked) RfbConstants.BUTTON_LEFT else 0)
         } else {
             if (cursorX !in 0 until desktopWidth || cursorY !in 0 until desktopHeight) {
                 cursorX = desktopWidth / 2
@@ -362,7 +387,7 @@ class TouchInputController(
     ) {
         activePointers[pointerId] = x to y
         if (activePointers.size == 2 && state != GestureState.WAIT_ALL_UP) {
-            if (state == GestureState.DRAGGING && cursorX >= 0 && cursorY >= 0) {
+            if (state == GestureState.DRAGGING && !dragLocked && cursorX >= 0 && cursorY >= 0) {
                 onPointerEvent(cursorX, cursorY, 0)
             }
             val pts = activePointers.values.toList()
@@ -380,7 +405,7 @@ class TouchInputController(
     }
 
     fun checkLongPress(nowMs: Long): Boolean {
-        if (state != GestureState.PENDING_TAP || longPressTriggered || cursorX < 0 || cursorY < 0) {
+        if (state != GestureState.PENDING_TAP || longPressTriggered || dragLocked || cursorX < 0 || cursorY < 0) {
             return false
         }
         if (mode == TouchInputMode.TRACKPAD && (trackpadMoved || doubleTapCandidate)) {
@@ -499,7 +524,7 @@ class TouchInputController(
                     if (dx != 0 || dy != 0) {
                         cursorX = (cursorX + dx).coerceIn(0, desktopWidth - 1)
                         cursorY = (cursorY + dy).coerceIn(0, desktopHeight - 1)
-                        val mask = if (state == GestureState.DRAGGING) RfbConstants.BUTTON_LEFT else 0
+                        val mask = if (state == GestureState.DRAGGING || dragLocked) RfbConstants.BUTTON_LEFT else 0
                         onPointerEvent(cursorX, cursorY, mask)
                     }
                 }
@@ -571,7 +596,7 @@ class TouchInputController(
                         cursorY = pt.y
                     }
                 }
-                if (cursorX >= 0 && cursorY >= 0) {
+                if (!dragLocked && cursorX >= 0 && cursorY >= 0) {
                     onPointerEvent(cursorX, cursorY, 0)
                 }
                 lastTapUpTimeMs = 0L
@@ -581,16 +606,29 @@ class TouchInputController(
                 if (mode == TouchInputMode.DIRECT_TAP) {
                     val pt = viewToDesktop(x, y, viewWidth, viewHeight, desktopWidth, desktopHeight)
                     if (pt != null) {
-                        cursorX = pt.x
-                        cursorY = pt.y
+                        if (snapDoubleTap &&
+                            (nowMs - lastDirectTapTimeMs) in 1L..450L &&
+                            lastDirectTapX >= 0 && lastDirectTapY >= 0 &&
+                            hypot((pt.x - lastDirectTapX).toFloat(), (pt.y - lastDirectTapY).toFloat()) <= 28f
+                        ) {
+                            cursorX = lastDirectTapX
+                            cursorY = lastDirectTapY
+                        } else {
+                            cursorX = pt.x
+                            cursorY = pt.y
+                        }
                     }
                     if (!longPressTriggered && cursorX >= 0 && cursorY >= 0) {
                         if (nowMs - downTimeMs >= longPressMs) {
                             onPointerEvent(cursorX, cursorY, RfbConstants.BUTTON_RIGHT)
                             onPointerEvent(cursorX, cursorY, 0)
-                        } else {
+                            lastDirectTapTimeMs = 0L
+                        } else if (!dragLocked) {
                             onPointerEvent(cursorX, cursorY, RfbConstants.BUTTON_LEFT)
                             onPointerEvent(cursorX, cursorY, 0)
+                            lastDirectTapTimeMs = nowMs
+                            lastDirectTapX = cursorX
+                            lastDirectTapY = cursorY
                         }
                     }
                 } else {
@@ -599,7 +637,7 @@ class TouchInputController(
                             onPointerEvent(cursorX, cursorY, RfbConstants.BUTTON_RIGHT)
                             onPointerEvent(cursorX, cursorY, 0)
                             lastTapUpTimeMs = 0L
-                        } else {
+                        } else if (!dragLocked) {
                             onPointerEvent(cursorX, cursorY, RfbConstants.BUTTON_LEFT)
                             onPointerEvent(cursorX, cursorY, 0)
                             lastTapUpTimeMs = nowMs
@@ -612,9 +650,10 @@ class TouchInputController(
     }
 
     fun onTouchCancel() {
-        if (state == GestureState.DRAGGING && cursorX >= 0 && cursorY >= 0) {
+        if ((state == GestureState.DRAGGING || dragLocked) && cursorX >= 0 && cursorY >= 0) {
             onPointerEvent(cursorX, cursorY, 0)
         }
+        dragLocked = false
         activePointers.clear()
         state = GestureState.IDLE
         longPressTriggered = false

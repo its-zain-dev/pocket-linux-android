@@ -36,11 +36,18 @@ class ProotCommandBuilder(
     val prootTmpDir: File = File(cacheDir, "proot_tmp")
     val shmDir: File = File(cacheDir, "proot_shm")
     val virglIpcDir: File = File(cacheDir, "virgl_ipc")
+    val emptyPhoneDir: File = File(cacheDir, "empty_phone")
+    val hidePhoneStorageFlag: File = File(filesDir, "hide_phone_storage")
     val fakeProcDir: File = File(filesDir, "proot_fake_proc")
+
+    fun isPhoneStorageHidden(): Boolean {
+        return hidePhoneStorageFlag.exists() ||
+            File(rootfsDir, "root/.config/pocketlinux/privacy_hide_phone").exists()
+    }
 
     /**
      * Ensures auxiliary runtime directories, POSIX `/dev/shm` shared memory, VirGL IPC dir,
-     * and dynamic multi-core `/proc` files synced from real Android hardware exist.
+     * dynamic multi-core `/proc` files, and live Android DNS servers exist.
      */
     fun ensureRuntimeDirsAndFakeProc() {
         runCatching {
@@ -48,6 +55,7 @@ class ProotCommandBuilder(
             if (!prootTmpDir.isDirectory) prootTmpDir.mkdirs()
             if (!shmDir.isDirectory) shmDir.mkdirs()
             if (!virglIpcDir.isDirectory) virglIpcDir.mkdirs()
+            if (!emptyPhoneDir.isDirectory) emptyPhoneDir.mkdirs()
             if (!fakeProcDir.isDirectory) fakeProcDir.mkdirs()
 
             val profile = LinuxResourceGovernor.probeHardware(appContext)
@@ -56,6 +64,7 @@ class ProotCommandBuilder(
                 rootfsDir = rootfsDir,
                 profile = profile
             )
+            LinuxResourceGovernor.syncResolvConf(appContext, rootfsDir)
         }
     }
 
@@ -70,6 +79,7 @@ class ProotCommandBuilder(
             "USER" to "root",
             "XDG_CONFIG_HOME" to "/root/.config",
             "XDG_DATA_HOME" to "/root/.local/share",
+            "XDG_RUNTIME_DIR" to "/tmp/runtime-root",
             "TERM" to "xterm-256color",
             "LANG" to "C.UTF-8",
             "TMPDIR" to "/tmp",
@@ -90,6 +100,7 @@ class ProotCommandBuilder(
         env["GSETTINGS_BACKEND"] = "memory"
         env["GDK_RENDERING"] = "image"
         env["MESA_SHADER_CACHE_DIR"] = "/tmp/mesa_shader_cache"
+        env["POCKETLINUX_NET_BRIDGE"] = "http://127.0.0.1:${AndroidNetworkBridge.DEFAULT_PORT}"
         val dbusAddrFile = File(rootfsDir, "tmp/.pocketlinux_dbus_address")
         if (dbusAddrFile.isFile) {
             val addr = runCatching { dbusAddrFile.readText().trim() }.getOrDefault("")
@@ -137,10 +148,17 @@ class ProotCommandBuilder(
             argv.add("${virglSocket.absolutePath}:/tmp/.virgl_test")
         }
 
-        val phoneStorage = File("/storage/emulated/0")
-        if (phoneStorage.isDirectory && phoneStorage.canRead()) {
-            argv.add("-b")
-            argv.add("${phoneStorage.absolutePath}:/mnt/phone")
+        if (isPhoneStorageHidden()) {
+            if (emptyPhoneDir.isDirectory) {
+                argv.add("-b")
+                argv.add("${emptyPhoneDir.absolutePath}:/mnt/phone")
+            }
+        } else {
+            val phoneStorage = File("/storage/emulated/0")
+            if (phoneStorage.isDirectory && phoneStorage.canRead()) {
+                argv.add("-b")
+                argv.add("${phoneStorage.absolutePath}:/mnt/phone")
+            }
         }
 
         for (name in FAKE_PROC_FILES) {

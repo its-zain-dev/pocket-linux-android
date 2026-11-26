@@ -148,4 +148,37 @@ class DesktopSurfaceInputTest {
             events
         )
     }
+
+    @Test
+    fun directTapDoubleTapSnapAndDragLockWorkCleanly() {
+        val events = mutableListOf<Triple<Int, Int, Int>>()
+        val ctrl = TouchInputController(
+            mode = TouchInputMode.DIRECT_TAP,
+            snapDoubleTap = true
+        ) { x, y, mask ->
+            events.add(Triple(x, y, mask))
+        }
+
+        // First tap at (200, 300)
+        ctrl.onTouchDown(0, 200f, 300f, 1000, 1000, 1000, 1000, 1000L)
+        ctrl.onTouchUp(0, 200f, 300f, 1000, 1000, 1000, 1000, 1060L)
+        events.clear()
+
+        // Second tap 10px away within 200ms should snap to (200, 300)
+        ctrl.onTouchDown(0, 210f, 308f, 1000, 1000, 1000, 1000, 1200L)
+        ctrl.onTouchUp(0, 210f, 308f, 1000, 1000, 1000, 1000, 1250L)
+        assertEquals(Triple(200, 300, 0), events[0])
+        assertEquals(Triple(200, 300, RfbConstants.BUTTON_LEFT), events[1])
+        assertEquals(Triple(200, 300, 0), events[2])
+
+        // Drag-lock keeps left mouse button held while moving and releases on unlock
+        events.clear()
+        ctrl.dragLocked = true
+        assertTrue(ctrl.isDragging)
+        assertEquals(Triple(200, 300, RfbConstants.BUTTON_LEFT), events.last())
+
+        ctrl.dragLocked = false
+        assertFalse(ctrl.isDragging)
+        assertEquals(Triple(200, 300, 0), events.last())
+    }
 }

@@ -3,6 +3,7 @@ package com.pocketlinux.runtime
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
@@ -17,6 +18,7 @@ import androidx.core.app.ServiceCompat
 import com.pocketlinux.R
 import com.pocketlinux.rfb.RfbClient
 import com.pocketlinux.rfb.RfbConnectionState
+import com.pocketlinux.ui.MainActivity
 import com.pocketlinux.ui.TerminalSessionController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -29,6 +31,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 
 class LinuxRuntimeService : Service(), LinuxRuntimeController {
 
@@ -41,6 +44,8 @@ class LinuxRuntimeService : Service(), LinuxRuntimeController {
     private lateinit var engine: LinuxRuntimeEngine
     private lateinit var commandBuilder: ProotCommandBuilder
     private lateinit var virglServerManager: VirglServerManager
+    private val networkBridge = AndroidNetworkBridge()
+    private val shuttingDown = AtomicBoolean(false)
 
     val rfbClient: RfbClient = RfbClient()
     lateinit var terminalSession: TerminalSessionController
@@ -51,10 +56,13 @@ class LinuxRuntimeService : Service(), LinuxRuntimeController {
 
     override fun onCreate() {
         super.onCreate()
+        shuttingDown.set(false)
+        _shutdownRequested.value = false
         val rootfsManager = RootfsManager(this)
         commandBuilder = ProotCommandBuilder(this)
         virglServerManager = VirglServerManager(commandBuilder)
         serviceMonitorScope.launch {
+            runCatching { networkBridge.start() }
             runCatching { virglServerManager.start() }
         }
         createNotificationChannel()
@@ -94,6 +102,12 @@ class LinuxRuntimeService : Service(), LinuxRuntimeController {
     override fun onBind(intent: Intent?): IBinder = binder
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP_AND_EXIT) {
+            shutdownAndExit()
+            return START_NOT_STICKY
+        }
+        shuttingDown.set(false)
+        _shutdownRequested.value = false
         promoteToForeground("Linux runtime active")
         if (intent == null || intent.action == null || intent.action == ACTION_START_RUNTIME) {
             startRuntime()
@@ -101,14 +115,73 @@ class LinuxRuntimeService : Service(), LinuxRuntimeController {
         return START_NOT_STICKY
     }
 
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        // When user swipes PocketLinux away from Android Recents, cleanly stop Linux & remove notification.
+        shutdownAndExit()
+        super.onTaskRemoved(rootIntent)
+    }
+
     override fun startRuntime() {
-        if (::virglServerManager.isInitialized) {
-            serviceMonitorScope.launch {
+        if (shuttingDown.get()) return
+        serviceMonitorScope.launch {
+            runCatching { networkBridge.start() }
+            if (::virglServerManager.isInitialized) {
                 runCatching { virglServerManager.start() }
             }
         }
         engine.startRuntime()
     }
+
+    fun restartRuntime() {
+        serviceMonitorScope.launch {
+            runCatching { stopRuntime() }
+            delay(350L)
+            runCatching { startRuntime() }
+        }
+    }
+
+    fun shutdownAndExit() {
+        if (!shuttingDown.compareAndSet(false, true)) return
+        _shutdownRequested.value = true
+        runCatching { stopRuntime() }
+        if (::virglServerManager.isInitialized) {
+            runCatching { virglServerManager.stop() }
+        }
+        runCatching { networkBridge.stop() }
+        runCatching {
+            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        }
+        runCatching {
+            getSystemService(NotificationManager::class.java)?.cancel(NOTIFICATION_ID)
+        }
+        stopSelf()
+    }
+
+    fun isPhoneStorageHidden(): Boolean {
+        return if (::commandBuilder.isInitialized) {
+            commandBuilder.isPhoneStorageHidden()
+        } else {
+            File(filesDir, "hide_phone_storage").exists()
+        }
+    }
+
+    fun setPhoneStorageHidden(hidden: Boolean) {
+        runCatching {
+            val hostFlag = File(filesDir, "hide_phone_storage")
+            val guestFlag = File(filesDir, "rootfs/root/.config/pocketlinux/privacy_hide_phone")
+            if (hidden) {
+                hostFlag.writeText("1\n")
+                guestFlag.parentFile?.mkdirs()
+                guestFlag.writeText("1\n")
+            } else {
+                hostFlag.delete()
+                guestFlag.delete()
+            }
+        }
+        restartRuntime()
+    }
+
+    fun getRootfsDir(): File = File(filesDir, "rootfs")
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
@@ -128,7 +201,9 @@ class LinuxRuntimeService : Service(), LinuxRuntimeController {
             terminalSession.closeCurrentSession()
         }
         runCatching { rfbClient.disconnect() }
-        engine.stopRuntime()
+        if (::engine.isInitialized) {
+            engine.stopRuntime()
+        }
     }
 
     override suspend fun execCommand(command: String, timeoutMs: Long): CommandResult =
@@ -170,6 +245,7 @@ class LinuxRuntimeService : Service(), LinuxRuntimeController {
         if (::virglServerManager.isInitialized) {
             runCatching { virglServerManager.stop() }
         }
+        runCatching { networkBridge.stop() }
         runCatching {
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         }
@@ -204,10 +280,32 @@ class LinuxRuntimeService : Service(), LinuxRuntimeController {
     }
 
     private fun buildNotification(contentText: String): Notification {
+        val openIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val openPending = PendingIntent.getActivity(
+            this,
+            0,
+            openIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val exitIntent = Intent(this, LinuxRuntimeService::class.java).apply {
+            action = ACTION_STOP_AND_EXIT
+        }
+        val exitPending = PendingIntent.getService(
+            this,
+            1,
+            exitIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle(getString(R.string.app_name))
             .setContentText(contentText)
+            .setContentIntent(openPending)
+            .addAction(android.R.drawable.ic_lock_power_off, "Exit & Stop", exitPending)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -215,6 +313,7 @@ class LinuxRuntimeService : Service(), LinuxRuntimeController {
     }
 
     private fun promoteToForeground(contentText: String) {
+        if (shuttingDown.get()) return
         runCatching {
             val notification = buildNotification(contentText)
             val fgsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -227,6 +326,7 @@ class LinuxRuntimeService : Service(), LinuxRuntimeController {
     }
 
     private fun updateNotification(contentText: String) {
+        if (shuttingDown.get()) return
         runCatching {
             val manager = getSystemService(NotificationManager::class.java) ?: return
             manager.notify(NOTIFICATION_ID, buildNotification(contentText))
@@ -235,6 +335,7 @@ class LinuxRuntimeService : Service(), LinuxRuntimeController {
 
     companion object {
         const val ACTION_START_RUNTIME = "com.pocketlinux.runtime.ACTION_START_RUNTIME"
+        const val ACTION_STOP_AND_EXIT = "com.pocketlinux.runtime.ACTION_STOP_AND_EXIT"
         const val NOTIFICATION_CHANNEL_ID = "pocketlinux_runtime"
         const val NOTIFICATION_ID = 1001
 
@@ -246,5 +347,12 @@ class LinuxRuntimeService : Service(), LinuxRuntimeController {
 
         private val _sharedTerminalSession = MutableStateFlow<TerminalSessionController?>(null)
         val sharedTerminalSession: StateFlow<TerminalSessionController?> = _sharedTerminalSession.asStateFlow()
+
+        private val _shutdownRequested = MutableStateFlow(false)
+        val shutdownRequested: StateFlow<Boolean> = _shutdownRequested.asStateFlow()
+
+        fun clearShutdownFlag() {
+            _shutdownRequested.value = false
+        }
     }
 }

@@ -3,10 +3,16 @@
     <!-- Categorized Start Menu -->
     <RootMenu onroot="12">
         <Program label="App Store (PocketStore)" icon="system-software-install">pocketlinux-store.py</Program>
-        <Program label="Settings &amp; GPU" icon="preferences-system">pocketlinux-settings.py</Program>
+        <Program label="Download Manager" icon="folder-download">pocketlinux-downloads.py</Program>
+        <Program label="Settings &amp; Personalization" icon="preferences-system">pocketlinux-settings.py</Program>
+        <Separator/>
+        <Menu label="Installed Apps" icon="applications-other">
+            <Include>/root/.jwmrc-apps</Include>
+        </Menu>
         <Separator/>
         <Program label="Terminal" icon="utilities-terminal">xterm -fa "DejaVu Sans Mono" -fs 12 -bg "#0F172A" -fg "#E2E8F0"</Program>
         <Program label="File Manager" icon="system-file-manager">pcmanfm /root</Program>
+        <Program label="Applications Folder" icon="folder">pcmanfm /root/Applications</Program>
         <Separator/>
         <Menu label="Accessories" icon="applications-accessories">
             <Program label="Text Editor (Mousepad)" icon="accessories-text-editor">mousepad</Program>
@@ -21,6 +27,8 @@
         <Menu label="System" icon="applications-system">
             <Program label="Settings &amp; GPU Control" icon="preferences-system">pocketlinux-settings.py</Program>
             <Program label="App Store (PocketStore)" icon="system-software-install">pocketlinux-store.py</Program>
+            <Program label="Download Manager" icon="folder-download">pocketlinux-downloads.py</Program>
+            <Program label="Sync Installed Apps" icon="view-refresh">pocketlinux-sync-apps.py</Program>
             <Program label="System Health &amp; ELF Check" icon="utilities-system-monitor">xterm -T "PocketLinux Health Check" -fa "DejaVu Sans Mono" -fs 11 -bg "#0F172A" -fg "#E2E8F0" -hold -e /usr/local/bin/linux-health.sh</Program>
             <Program label="Process Monitor (htop)" icon="utilities-system-monitor">xterm -T "htop" -fa "DejaVu Sans Mono" -fs 11 -bg "#0F172A" -fg "#E2E8F0" -e htop</Program>
             <Program label="System Info (sysinfo)" icon="dialog-information">xterm -T "System Info" -fa "DejaVu Sans Mono" -fs 11 -bg "#0F172A" -fg "#E2E8F0" -hold -e /usr/local/bin/sysinfo.sh --text</Program>
@@ -30,100 +38,23 @@
         <Exit label="Exit Desktop" confirm="false" icon="application-exit"/>
     </RootMenu>
 
-    <!-- Touch-friendly 42px bottom taskbar / dock -->
-    <Tray x="0" y="-1" height="42" autohide="off" halign="fixed" valign="bottom">
-        <TrayButton label=" Apps " icon="start-here">root:1</TrayButton>
-        <Spacer width="4"/>
-        <TrayButton label=" Store " icon="system-software-install">exec:pocketlinux-store.py</TrayButton>
-        <TrayButton label=" Settings " icon="preferences-system">exec:pocketlinux-settings.py</TrayButton>
-        <TrayButton label=" Term " icon="utilities-terminal">exec:xterm -fa "DejaVu Sans Mono" -fs 12 -bg "#0F172A" -fg "#E2E8F0"</TrayButton>
-        <TrayButton label=" Files " icon="system-file-manager">exec:pcmanfm /root</TrayButton>
-        <TrayButton label=" Edit " icon="accessories-text-editor">exec:mousepad</TrayButton>
-        <Spacer width="6"/>
-        <Pager labeled="true"/>
-        <TaskList maxwidth="220"/>
-        <Dock/>
-        <Clock format="%H:%M"/>
-    </Tray>
+    <!-- Keep PocketLinux interactive desktop canvas always beneath all windows -->
+    <Group>
+        <Class>PocketLinuxDesktop</Class>
+        <Option>layer:below</Option>
+        <Option>noborder</Option>
+        <Option>notitle</Option>
+        <Option>nolist</Option>
+        <Option>nopager</Option>
+        <Option>sticky</Option>
+        <Option>fixed</Option>
+    </Group>
 
-    <WindowStyle>
-        <Font>DejaVu Sans-10:bold</Font>
-        <Width>4</Width>
-        <Height>28</Height>
-        <Corner>6</Corner>
-        <Foreground>#CBD5E1</Foreground>
-        <Background>#1E293B</Background>
-        <Outline>#334155</Outline>
-        <Opacity>1.0</Opacity>
-        <Active>
-            <Foreground>#FFFFFF</Foreground>
-            <Background>#0EA5E9</Background>
-            <Outline>#38BDF8</Outline>
-            <Opacity>1.0</Opacity>
-        </Active>
-    </WindowStyle>
-
-    <TrayStyle group="true" list="all">
-        <Font>DejaVu Sans-10:bold</Font>
-        <Background>#0F172A</Background>
-        <Foreground>#F1F5F9</Foreground>
-        <Outline>#1E293B</Outline>
-        <Active>
-            <Foreground>#FFFFFF</Foreground>
-            <Background>#0284C7</Background>
-        </Active>
-    </TrayStyle>
-
-    <TaskListStyle>
-        <Font>DejaVu Sans-10</Font>
-        <Active>
-            <Foreground>#FFFFFF</Foreground>
-            <Background>#0EA5E9</Background>
-        </Active>
-        <Foreground>#CBD5E1</Foreground>
-        <Background>#1E293B</Background>
-    </TaskListStyle>
-
-    <PagerStyle>
-        <Outline>#334155</Outline>
-        <Foreground>#38BDF8</Foreground>
-        <Background>#0F172A</Background>
-        <Text>#E2E8F0</Text>
-        <Active>
-            <Foreground>#0EA5E9</Foreground>
-            <Background>#1E293B</Background>
-        </Active>
-    </PagerStyle>
-
-    <MenuStyle>
-        <Font>DejaVu Sans-11</Font>
-        <Foreground>#F1F5F9</Foreground>
-        <Background>#0F172A</Background>
-        <Outline>#334155</Outline>
-        <Active>
-            <Foreground>#FFFFFF</Foreground>
-            <Background>#0EA5E9</Background>
-        </Active>
-    </MenuStyle>
-
-    <ClockStyle>
-        <Font>DejaVu Sans-11:bold</Font>
-        <Foreground>#38BDF8</Foreground>
-        <Background>#0F172A</Background>
-    </ClockStyle>
-
-    <Desktops width="2" height="1">
-        <Background type="solid">#0F172A</Background>
-    </Desktops>
+    <!-- Live customizable Taskbar, Accent Theme, Workspaces & Window Behavior -->
+    <Include>/root/.jwmrc-theme</Include>
 
     <StartupCommand>xsetroot -cursor_name left_ptr</StartupCommand>
-
-    <DoubleClickSpeed>400</DoubleClickSpeed>
-    <DoubleClickDelta>4</DoubleClickDelta>
     <FocusModel>click</FocusModel>
-    <SnapMode distance="10">border</SnapMode>
-    <MoveMode>opaque</MoveMode>
-    <ResizeMode>outline</ResizeMode>
 
     <Key mask="A" key="Tab">nextstacked</Key>
     <Key mask="A" key="F4">close</Key>
