@@ -95,6 +95,6 @@ python3 scripts/ci/verify-apk.py --apk app/build/outputs/apk/arm64/debug/app-arm
 Push a version tag and GitHub Actions (`.github/workflows/release.yml`) automatically builds, verifies, checksums, and publishes the APKs to **GitHub Releases**:
 
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+git tag v1.0.1
+git push origin v1.0.1
 ```

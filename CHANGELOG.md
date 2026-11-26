@@ -2,6 +2,11 @@
 
 All notable changes to **PocketLinux for Android** are documented in this file.
 
+## [1.0.1] - 2026-11-26
+
+### Fixed
+- `glxgears` failed with `Error: couldn't get an RGB, Double-buffered visual`. The rootfs now bundles `mesa-gl`, `mesa-dri-gallium` and `mesa-demos`, `Xvnc` starts with `+extension GLX`, and `LIBGL_ALWAYS_SOFTWARE=1` is set when VirGL is not active.
+
 ## [1.0.0] - 2026-11-23
 
 Major v1.0 release transforming PocketLinux into a polished, mobile-first, rootless Alpine Linux 3.20 desktop and terminal environment for Android.
