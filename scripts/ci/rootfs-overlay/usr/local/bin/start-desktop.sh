@@ -6,6 +6,8 @@ export HOME="${HOME:-/root}"
 export USER="${USER:-root}"
 export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-/root/.config}"
 export XDG_DATA_HOME="${XDG_DATA_HOME:-/root/.local/share}"
+export NO_AT_BRIDGE=1
+export GTK_A11Y=none
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 # Ensure Alpine DNS resolves even if Android Private DNS / ISP blocks UDP 53
@@ -54,6 +56,8 @@ Xvnc "$DISPLAY" \
     -ac \
     -AlwaysShared \
     -ZlibLevel 1 \
+    -CompareFB 1 \
+    -dpi 96 \
     -FrameRate 60 >/tmp/xvnc.log 2>&1 &
 XVNC_PID=$!
 

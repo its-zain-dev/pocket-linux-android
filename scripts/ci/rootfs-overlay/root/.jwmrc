@@ -122,8 +122,8 @@
     <DoubleClickDelta>4</DoubleClickDelta>
     <FocusModel>click</FocusModel>
     <SnapMode distance="10">border</SnapMode>
-    <MoveMode>opaque</MoveMode>
-    <ResizeMode>opaque</ResizeMode>
+    <MoveMode>outline</MoveMode>
+    <ResizeMode>outline</ResizeMode>
 
     <Key mask="A" key="Tab">nextstacked</Key>
     <Key mask="A" key="F4">close</Key>
