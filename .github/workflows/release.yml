@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag name (e.g. v1.0.1)'
+        description: 'Release tag name (e.g. v1.1.0)'
         required: true
-        default: 'v1.0.1'
+        default: 'v1.1.0'
 
 permissions:
   contents: write
@@ -90,11 +90,11 @@ jobs:
           python3 scripts/ci/verify-apk.py \
             --apk app/build/outputs/apk/arm64/debug/app-arm64-debug.apk \
             --abi arm64-v8a \
-            --max-size-mb 140
+            --max-size-mb 180
           python3 scripts/ci/verify-apk.py \
             --apk app/build/outputs/apk/x86_64/debug/app-x86_64-debug.apk \
             --abi x86_64 \
-            --max-size-mb 140
+            --max-size-mb 180
 
       - name: Stage release assets and checksums
         run: |

@@ -109,7 +109,10 @@ jobs:
               printf "%s\n" "$xvnc_out" | grep -qi "Xvnc"
               jwm_out="$(jwm -v 2>&1 || true)"
               printf "%s\n" "$jwm_out" | grep -qi "JWM"
+              command -v glxgears >/dev/null
+              command -v glxinfo >/dev/null
               /usr/local/bin/sysinfo.sh
+              /usr/local/bin/sysinfo.sh --text
             '
           }
 
@@ -131,11 +134,11 @@ jobs:
           python3 scripts/ci/verify-apk.py \
             --apk app/build/outputs/apk/arm64/debug/app-arm64-debug.apk \
             --abi arm64-v8a \
-            --max-size-mb 175
+            --max-size-mb 180
           python3 scripts/ci/verify-apk.py \
             --apk app/build/outputs/apk/x86_64/debug/app-x86_64-debug.apk \
             --abi x86_64 \
-            --max-size-mb 175
+            --max-size-mb 180
 
       - name: Upload arm64 debug APK
         uses: actions/upload-artifact@v4

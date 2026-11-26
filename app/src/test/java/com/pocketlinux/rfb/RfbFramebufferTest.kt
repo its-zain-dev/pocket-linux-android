@@ -187,4 +187,30 @@ class RfbFramebufferTest {
             dest
         )
     }
+
+    @Test
+    fun consumeDirtyRegionExtractsOnlyModifiedBoundsAndResetsCleanly() {
+        val fb = RfbFramebuffer()
+        fb.resize(10, 8)
+        val scratch = IntArray(80)
+
+        // Initial resize marks entire 10x8 framebuffer dirty
+        val initial = fb.consumeDirtyRegionInto(scratch, 10, 8, forceFull = false)!!
+        assertEquals(DirtyRegion(0, 0, 10, 8), initial)
+
+        // Subsequent consume with no writes returns empty 0x0 region (zero pixel copy)
+        val clean = fb.consumeDirtyRegionInto(scratch, 10, 8, forceFull = false)!!
+        assertEquals(DirtyRegion(0, 0, 0, 0), clean)
+
+        // Modify two small rects: (2, 3, 2x2) and (5, 4, 1x2) -> bounding box (2, 3, 4x3)
+        fb.fillRect(2, 3, 2, 2, 0x00112233)
+        fb.fillRect(5, 4, 1, 2, 0x00AABBCC)
+        val dirty = fb.consumeDirtyRegionInto(scratch, 10, 8, forceFull = false)!!
+        assertEquals(DirtyRegion(2, 3, 4, 3), dirty)
+        assertEquals(0xFF112233.toInt(), scratch[0]) // (2,3)
+        assertEquals(0xFF112233.toInt(), scratch[1]) // (3,3)
+        assertEquals(0xFF000000.toInt(), scratch[2]) // (4,3) untouched
+        assertEquals(0xFFAABBCC.toInt(), scratch[1 * 4 + 3]) // (5,4)
+        assertEquals(0xFFAABBCC.toInt(), scratch[2 * 4 + 3]) // (5,5)
+    }
 }

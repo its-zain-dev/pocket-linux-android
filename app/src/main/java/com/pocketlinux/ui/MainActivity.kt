@@ -269,17 +269,18 @@ private fun PocketLinuxMainScreen(
         if (currentService != null) {
             scope.launch {
                 runCatching { currentService.launchGuiApp(command) }
-                refreshMetricsNow()
             }
         }
     }
 
-    LaunchedEffect(service, runtimeState) {
+    LaunchedEffect(service, runtimeState, selectedTab, menuExpanded) {
         if (service == null) return@LaunchedEffect
-        refreshMetricsNow()
-        if (runtimeState is RuntimeState.Ready) {
+        if (selectedTab == 2 || menuExpanded || latestMetrics == null) {
+            refreshMetricsNow()
+        }
+        if (runtimeState is RuntimeState.Ready && selectedTab == 2) {
             while (true) {
-                delay(4_000L)
+                delay(8_000L)
                 refreshMetricsNow()
             }
         }

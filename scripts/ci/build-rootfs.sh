@@ -57,6 +57,7 @@ PACKAGES=(
     mesa-gl
     mesa-dri-gallium
     mesa-demos
+    gtk-update-icon-cache
 )
 
 SKIP_EXISTING=false
@@ -250,6 +251,7 @@ gtk-icon-theme-name=Adwaita
 gtk-font-name=DejaVu Sans 10
 gtk-cursor-theme-name=Adwaita
 gtk-toolbar-style=GTK_TOOLBAR_ICONS
+gtk-enable-animations=0
 EOF
 
     cat <<'EOF' | sudo tee "$rootfs/root/.config/gtk-3.0/bookmarks" >/dev/null
@@ -271,15 +273,15 @@ confirm_del=1
 confirm_trash=0
 quick_exec=1
 terminal=xterm -fa "DejaVu Sans Mono" -fs 12 -bg "#0F172A" -fg "#E2E8F0" -e %s
-thumbnail_local=1
-thumbnail_max=2048
+thumbnail_local=0
+thumbnail_max=512
 
 [ui]
 big_icon_size=48
 small_icon_size=24
 pane_icon_size=24
-thumbnail_size=128
-show_thumbnail=1
+thumbnail_size=96
+show_thumbnail=0
 shadow_hidden=1
 EOF
 

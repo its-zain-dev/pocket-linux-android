@@ -115,9 +115,9 @@ object RfbConstants {
 
     val DEFAULT_ENCODINGS = intArrayOf(
         ENCODING_COPYRECT,
+        ENCODING_RAW,
         ENCODING_HEXTILE,
         ENCODING_ZLIB,
-        ENCODING_RAW,
         ENCODING_DESKTOP_SIZE,
         ENCODING_EXTENDED_DESKTOP_SIZE
     )

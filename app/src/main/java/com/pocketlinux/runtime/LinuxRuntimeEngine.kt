@@ -729,8 +729,8 @@ internal class LinuxRuntimeEngine(
         private const val DEFAULT_GEOMETRY = "1024x600"
         private const val DEFAULT_VNC_PORT = 5901
         private const val DEFAULT_BOOT_TIMEOUT_MS = 30_000L
-        private const val DEFAULT_BOOT_POLL_INTERVAL_MS = 150L
-        private const val DEFAULT_GUI_STARTUP_CHECK_MS = 250L
+        private const val DEFAULT_BOOT_POLL_INTERVAL_MS = 60L
+        private const val DEFAULT_GUI_STARTUP_CHECK_MS = 80L
         private const val XWIN_CHECK_TIMEOUT_MS = 5_000L
         private const val SYSINFO_TIMEOUT_MS = 5_000L
         private const val GRACEFUL_TERM_WAIT_MS = 1_500L

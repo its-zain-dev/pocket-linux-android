@@ -379,10 +379,15 @@ class RfbProtocol : Closeable {
         if (w == 0 || h == 0) return
 
         val rowBytes = w * 4
-        val buf = ensureRowBuffer(rowBytes)
-        for (row in 0 until h) {
-            input.readFully(buf, 0, rowBytes)
-            framebuffer.writeRawRowBgrx(x, y + row, w, buf, 0)
+        val rowsPerChunk = (262_144 / rowBytes).coerceIn(1, h)
+        val buf = ensureRowBuffer(rowBytes * rowsPerChunk)
+        var row = 0
+        while (row < h) {
+            val chunkRows = minOf(rowsPerChunk, h - row)
+            val chunkBytes = chunkRows * rowBytes
+            input.readFully(buf, 0, chunkBytes)
+            framebuffer.writeRawRectBgrx(x, y + row, w, chunkRows, buf, 0)
+            row += chunkRows
         }
     }
 
@@ -431,16 +436,7 @@ class RfbProtocol : Closeable {
                 if ((subencoding and RfbConstants.HEXTILE_RAW) != 0) {
                     val tileBytes = tileW * tileH * 4
                     input.readFully(hextileTileBuffer, 0, tileBytes)
-                    val rowStride = tileW * 4
-                    for (r in 0 until tileH) {
-                        framebuffer.writeRawRowBgrx(
-                            tx,
-                            ty + r,
-                            tileW,
-                            hextileTileBuffer,
-                            r * rowStride
-                        )
-                    }
+                    framebuffer.writeRawRectBgrx(tx, ty, tileW, tileH, hextileTileBuffer, 0)
                 } else {
                     if ((subencoding and RfbConstants.HEXTILE_BACKGROUND_SPECIFIED) != 0) {
                         bg = readPixelBgrx(input)
@@ -509,12 +505,16 @@ class RfbProtocol : Closeable {
 
         if (w > 0 && h > 0) {
             val rowBytes = w * 4
-            val rowBuf = ensureRowBuffer(rowBytes)
-            for (row in 0 until h) {
+            val rowsPerChunk = (262_144 / rowBytes).coerceIn(1, h)
+            val rowBuf = ensureRowBuffer(rowBytes * rowsPerChunk)
+            var row = 0
+            while (row < h) {
+                val chunkRows = minOf(rowsPerChunk, h - row)
+                val chunkBytes = chunkRows * rowBytes
                 var filled = 0
-                while (filled < rowBytes) {
+                while (filled < chunkBytes) {
                     val produced = try {
-                        inflater.inflate(rowBuf, filled, rowBytes - filled)
+                        inflater.inflate(rowBuf, filled, chunkBytes - filled)
                     } catch (e: DataFormatException) {
                         throw RfbProtocolException("Malformed Zlib stream", e)
                     }
@@ -540,7 +540,8 @@ class RfbProtocol : Closeable {
                     }
                     filled += produced
                 }
-                framebuffer.writeRawRowBgrx(x, y + row, w, rowBuf, 0)
+                framebuffer.writeRawRectBgrx(x, y + row, w, chunkRows, rowBuf, 0)
+                row += chunkRows
             }
         }
 

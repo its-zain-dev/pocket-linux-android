@@ -12,10 +12,12 @@
 
 ## Key Features
 
+- **Turbo VNC & Desktop Engine (v1.1.0)**: Zero-compression `CopyRect + Raw` loopback streaming (`-CompareFB 0 -ZlibLevel 0 -FrameRate 90`), partial dirty-rectangle GPU `Bitmap` uploads, FIFO-exact 120Hz/240Hz touch motion coalescing, velocity-accelerated trackpad pointer, and PRoot `seccomp-BPF` acceleration.
 - **Immersive Fullscreen Linux Desktop**: Runs **TigerVNC (`Xvnc`)**, **JWM**, and **PCManFM** desktop icons with a dark gradient wallpaper and touch-friendly 42px taskbar. A tiny semi-transparent floating menu pill (`☰`) keeps 100% of the screen dedicated to Linux.
 - **Smart Auto-Keyboard Control Bar**: Uses a custom pure-Kotlin **RFB 3.8** VNC client (`SurfaceView` + Gboard/Samsung IME bridge). Whenever the Android keyboard opens, a sleek control bar (`Esc`, `Tab`, `Ctrl`, `Alt`, `Super`, arrow keys, `Tap/Trackpad`, `Right Click`) automatically appears above it and hides when you're done typing.
 - **PocketStore (Built-in GTK-3 App Store)**: Browse featured Linux apps (`Geany`, `GIMP`, `NetSurf`, `AbiWord`, `Gnumeric`, `MuPDF`, `Node.js`, `GCC`, `SuperTux`, `DOSBox`), search all Alpine 3.20 repositories live, and install with automatic dependency & library resolution (`apk update && apk add --upgrade && apk fix`).
-- **PocketLinux Settings & GPU Control Center**: Configure GPU rendering modes (**VirGL** hardware acceleration when bundled, fast multi-threaded **LLVMpipe**, or **Zink**), switch display resolutions live via `xrandr`, clean caches, and run 1-click library repair.
+- **PocketLinux Settings & OpenGL/GLX Control Center**: Bundles Mesa GLX + Gallium (`mesa-gl`, `mesa-dri-gallium`, `glxgears`, `glxinfo`) with `+extension GLX` enabled out of the box (**VirGL** hardware acceleration when available or multi-threaded **LLVMpipe** with `GALLIUM_THREAD=true`), live `xrandr` resolution switching, cache cleanup, and 1-click library repair.
+- **Instant GTK/X11 App Launches**: Pre-built `mmap` icon caches (`Adwaita`/`hicolor`), precompiled Python bytecode, shared D-Bus session propagation, and `GIO_USE_VFS=local` / `NO_AT_BRIDGE=1` eliminate multi-second D-Bus/GVFS startup stalls.
 - **Native C/JNI PTY Terminal**: Built-in `/bin/bash -l` VT100 terminal backed by `libptybridge.so` (`forkpty`) with tap-anywhere-to-type focus and extra keys.
 - **Full Linux & ELF Compatibility**: Executes native `aarch64` / `x86_64` musl & static ELF64 binaries plus **`gcompat`** for glibc ELF binaries, **SELinux-safe `/proc` emulation**, pre-populated `/root` folders + GTK-3 dark bookmarks (`/mnt/sdcard` & `/mnt/phone`), and **automatic DNS-over-HTTPS fallback** (`fix-dns.sh`) when UDP port 53 is restricted.
 
@@ -95,6 +97,6 @@ python3 scripts/ci/verify-apk.py --apk app/build/outputs/apk/arm64/debug/app-arm
 Push a version tag and GitHub Actions (`.github/workflows/release.yml`) automatically builds, verifies, checksums, and publishes the APKs to **GitHub Releases**:
 
 ```bash
-git tag v1.0.1
-git push origin v1.0.1
+git tag v1.1.0
+git push origin v1.1.0
 ```

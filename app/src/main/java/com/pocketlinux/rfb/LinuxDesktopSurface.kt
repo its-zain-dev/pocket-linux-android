@@ -64,9 +64,12 @@ fun LinuxDesktopSurface(
     val touchController = remember(controller) {
         TouchInputController(
             mode = touchInputMode,
+            touchSlopPx = 8f,
+            trackpadSensitivity = 1.6f,
+            enableAcceleration = true,
             onPointerEvent = { x, y, mask ->
                 currentController.sendPointerEvent(x, y, mask)
-                if (currentMode == TouchInputMode.TRACKPAD) {
+                if (currentMode == TouchInputMode.TRACKPAD || mask != 0) {
                     surfaceHolderRef[0]?.requestRender()
                 }
             }
@@ -98,10 +101,14 @@ fun LinuxDesktopSurface(
         if (!autoResizeDesktop) return@LaunchedEffect
         if (connectionState !is RfbConnectionState.Connected) return@LaunchedEffect
         if (surfaceSize.width <= 0 || surfaceSize.height <= 0) return@LaunchedEffect
-        delay(250L)
+        delay(200L)
         val target = computeAutoDesktopSize(
             surfaceWidth = surfaceSize.width,
-            surfaceHeight = surfaceSize.height
+            surfaceHeight = surfaceSize.height,
+            minWidth = 640,
+            minHeight = 480,
+            maxWidth = 1280,
+            maxHeight = 800
         ) ?: return@LaunchedEffect
         if (target.width != currentController.desktopWidth ||
             target.height != currentController.desktopHeight
@@ -139,7 +146,10 @@ fun LinuxDesktopSurface(
             .pointerInput(controller) {
                 awaitEachGesture {
                     val firstDown = awaitFirstDown(requireUnconsumed = false)
-                    surfaceHolderRef[0]?.requestFocus()
+                    val surfaceView = surfaceHolderRef[0]
+                    if (surfaceView != null && !surfaceView.hasFocus()) {
+                        surfaceView.requestFocus()
+                    }
 
                     val size = viewSizeRef[0]
                     val dw = currentController.desktopWidth
@@ -163,7 +173,9 @@ fun LinuxDesktopSurface(
                         }
                     }
 
-                    val activeIds = mutableSetOf(firstDown.id.value.toInt())
+                    val activeIds = HashSet<Int>(4)
+                    activeIds.add(firstDown.id.value.toInt())
+                    val movedMap = HashMap<Int, Pair<Float, Float>>(4)
 
                     try {
                         while (true) {
@@ -191,7 +203,7 @@ fun LinuxDesktopSurface(
                                     }
                                 }
                                 PointerEventType.Move -> {
-                                    val movedMap = HashMap<Int, Pair<Float, Float>>(event.changes.size)
+                                    movedMap.clear()
                                     for (change in event.changes) {
                                         movedMap[change.id.value.toInt()] =
                                             change.position.x to change.position.y
@@ -514,7 +526,7 @@ private class DesktopSurfaceView(
                         canvas.drawBitmap(frameBitmap, null, dstRect, bitmapPaint)
 
                         if (
-                            modeProvider() == TouchInputMode.TRACKPAD &&
+                            (modeProvider() == TouchInputMode.TRACKPAD || touchController.isDragging) &&
                             touchController.cursorX in 0 until frameBitmap.width &&
                             touchController.cursorY in 0 until frameBitmap.height
                         ) {

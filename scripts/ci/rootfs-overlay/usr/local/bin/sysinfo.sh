@@ -1,90 +1,96 @@
 #!/bin/sh
+# Fast POSIX sh + awk system telemetry helper (zero Python startup overhead under PRoot)
 set -eu
 
-exec /usr/bin/python3 - "$@" <<'PYEOF'
-import json
-import os
-import subprocess
-import sys
+MODE_ARG="${1:-}"
+DISPLAY_VAL="${DISPLAY:-:1}"
+SYSNAME="$(uname -s 2>/dev/null || echo Linux)"
+NODENAME="$(uname -n 2>/dev/null || echo localhost)"
+RELEASE="$(uname -r 2>/dev/null || echo unknown)"
+MACHINE="$(uname -m 2>/dev/null || echo unknown)"
 
-def read_first_line(path, default=""):
-    try:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            return f.readline().strip()
-    except OSError:
-        return default
+ALPINE_REL="unknown"
+if [ -r /etc/alpine-release ]; then
+    IFS= read -r ALPINE_REL < /etc/alpine-release || ALPINE_REL="unknown"
+fi
 
-def read_meminfo():
-    info = {}
-    try:
-        with open("/proc/meminfo", "r", encoding="utf-8", errors="replace") as f:
-            for line in f:
-                if ":" in line:
-                    k, v = line.split(":", 1)
-                    parts = v.strip().split()
-                    if parts and parts[0].isdigit():
-                        info[k] = int(parts[0])
-    except OSError:
-        pass
-    return info
+UPTIME_SEC="0.0"
+if [ -r /proc/uptime ]; then
+    UPTIME_SEC="$(awk '{printf "%.2f", $1+0; exit}' /proc/uptime 2>/dev/null || echo "0.0")"
+fi
 
-def read_uptime():
-    raw = read_first_line("/proc/uptime", "0 0").split()
-    try:
-        return float(raw[0])
-    except (IndexError, ValueError):
-        return 0.0
+MEM_LINE="0 0 0"
+if [ -r /proc/meminfo ]; then
+    MEM_LINE="$(awk '
+        /^MemTotal:/     { total = $2 }
+        /^MemFree:/      { free  = $2 }
+        /^MemAvailable:/ { avail = $2 }
+        END {
+            if (total == "") total = 0
+            if (free  == "") free  = 0
+            if (avail == "") avail = free
+            printf "%d %d %d", total, avail, free
+        }
+    ' /proc/meminfo 2>/dev/null || echo "0 0 0")"
+fi
+set -- $MEM_LINE
+MEM_TOTAL="${1:-0}"
+MEM_AVAIL="${2:-0}"
+MEM_FREE="${3:-0}"
 
-def count_procs():
-    try:
-        return sum(1 for name in os.listdir("/proc") if name.isdigit())
-    except OSError:
-        return 0
+PROC_COUNT=0
+for d in /proc/[0-9]*; do
+    if [ -d "$d" ]; then
+        PROC_COUNT=$((PROC_COUNT + 1))
+    fi
+done
+if [ "$PROC_COUNT" -le 0 ]; then
+    PROC_COUNT=1
+fi
 
-def query_x_windows(display=":1"):
-    windows = []
-    try:
-        env = dict(os.environ)
-        env["DISPLAY"] = display
-        res = subprocess.run(
-            ["xwininfo", "-display", display, "-root", "-tree"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            timeout=3,
-            env=env,
-        )
-        if res.returncode == 0:
-            for line in res.stdout.splitlines():
-                s = line.strip()
-                if s.startswith("0x"):
-                    windows.append(s)
-    except Exception:
-        pass
-    return windows
+X_WINS_JSON=""
+X_WIN_COUNT=0
+if command -v xwininfo >/dev/null 2>&1; then
+    X_RAW="$(DISPLAY="$DISPLAY_VAL" xwininfo -display "$DISPLAY_VAL" -root -children 2>/dev/null || true)"
+    if [ -n "$X_RAW" ]; then
+        X_WINS_JSON="$(printf '%s\n' "$X_RAW" | awk '
+            /^[[:space:]]*0x[0-9a-fA-F]+/ {
+                sub(/^[[:space:]]+/, "", $0)
+                gsub(/\\/, "\\\\", $0)
+                gsub(/"/, "\\\"", $0)
+                gsub(/\r/, "", $0)
+                items[++n] = "\"" $0 "\""
+            }
+            END {
+                for (i = 1; i <= n; i++) {
+                    printf "%s%s", (i > 1 ? "," : ""), items[i]
+                }
+            }
+        ')"
+        X_WIN_COUNT="$(printf '%s\n' "$X_RAW" | awk '/^[[:space:]]*0x[0-9a-fA-F]+/ { c++ } END { print c+0 }')"
+    fi
+fi
 
-uname = os.uname()
-mem = read_meminfo()
-payload = {
-    "sysname": uname.sysname,
-    "nodename": uname.nodename,
-    "release": uname.release,
-    "machine": uname.machine,
-    "alpine_release": read_first_line("/etc/alpine-release", "unknown"),
-    "uptime_sec": read_uptime(),
-    "mem_total_kb": mem.get("MemTotal", 0),
-    "mem_available_kb": mem.get("MemAvailable", mem.get("MemFree", 0)),
-    "mem_free_kb": mem.get("MemFree", 0),
-    "process_count": count_procs(),
-    "x_windows": query_x_windows(os.environ.get("DISPLAY", ":1")),
-}
-
-if "--text" in sys.argv[1:]:
-    print(f"OS: Alpine Linux {payload['alpine_release']} ({payload['machine']})")
-    print(f"Kernel: {payload['sysname']} {payload['release']}")
-    print(f"Memory: {payload['mem_available_kb']} / {payload['mem_total_kb']} kB available")
-    print(f"Processes: {payload['process_count']}")
-    print(f"X11 Windows: {len(payload['x_windows'])}")
-else:
-    print(json.dumps(payload))
-PYEOF
+if [ "$MODE_ARG" = "--text" ]; then
+    printf 'OS: Alpine Linux %s (%s)\n' "$ALPINE_REL" "$MACHINE"
+    printf 'Kernel: %s %s\n' "$SYSNAME" "$RELEASE"
+    printf 'Memory: %s / %s kB available\n' "$MEM_AVAIL" "$MEM_TOTAL"
+    printf 'Processes: %s\n' "$PROC_COUNT"
+    printf 'X11 Windows: %s\n' "$X_WIN_COUNT"
+else
+    json_escape() {
+        printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+    }
+    printf '{"sysname":"%s","nodename":"%s","release":"%s","machine":"%s","alpine_release":"%s","uptime_sec":%s,"mem_total_kb":%s,"mem_available_kb":%s,"mem_free_kb":%s,"process_count":%s,"x_windows":[%s]}\n' \
+        "$(json_escape "$SYSNAME")" \
+        "$(json_escape "$NODENAME")" \
+        "$(json_escape "$RELEASE")" \
+        "$(json_escape "$MACHINE")" \
+        "$(json_escape "$ALPINE_REL")" \
+        "$UPTIME_SEC" \
+        "$MEM_TOTAL" \
+        "$MEM_AVAIL" \
+        "$MEM_FREE" \
+        "$PROC_COUNT" \
+        "$X_WINS_JSON"
+fi

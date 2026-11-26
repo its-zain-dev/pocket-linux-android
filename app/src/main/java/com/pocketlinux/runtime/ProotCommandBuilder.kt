@@ -104,11 +104,22 @@ class ProotCommandBuilder(
         if (File(rootfsDir.parentFile, "proot_no_seccomp").exists()) {
             env["PROOT_NO_SECCOMP"] = "1"
         }
-        // Skip the GTK/Qt accessibility bus (a 3-10s stall on first window in PRoot).
+        // Skip the GTK/Qt accessibility bus and remote GVFS/dconf D-Bus lookups
+        // (each otherwise causes a 3-10s timeout on every GUI app launch inside PRoot).
         env["NO_AT_BRIDGE"] = "1"
         env["GTK_A11Y"] = "none"
         env["QT_ACCESSIBILITY"] = "0"
+        env["GIO_USE_VFS"] = "local"
+        env["GSETTINGS_BACKEND"] = "memory"
+        env["GDK_RENDERING"] = "image"
         env["MESA_SHADER_CACHE_DIR"] = "/tmp/mesa_shader_cache"
+        val dbusAddrFile = File(rootfsDir, "tmp/.pocketlinux_dbus_address")
+        if (dbusAddrFile.isFile) {
+            val addr = runCatching { dbusAddrFile.readText().trim() }.getOrDefault("")
+            if (addr.isNotEmpty()) {
+                env["DBUS_SESSION_BUS_ADDRESS"] = addr
+            }
+        }
         if (display != null) {
             env["DISPLAY"] = display
         }
