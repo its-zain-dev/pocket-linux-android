@@ -49,12 +49,15 @@ fun LinuxDesktopSurface(
     controller: RfbController,
     modifier: Modifier = Modifier,
     touchInputMode: TouchInputMode = TouchInputMode.DIRECT_TAP,
+    dragLocked: Boolean = false,
+    onCursorMoved: (Int, Int) -> Unit = { _, _ -> },
     softKeyboardTrigger: Int = 0,
     hideKeyboardTrigger: Int = 0,
     autoResizeDesktop: Boolean = false
 ) {
     val currentController by rememberUpdatedState(controller)
     val currentMode by rememberUpdatedState(touchInputMode)
+    val currentOnCursorMoved by rememberUpdatedState(onCursorMoved)
     val connectionState by controller.connectionState.collectAsState()
     val scope = rememberCoroutineScope()
 
@@ -68,7 +71,9 @@ fun LinuxDesktopSurface(
             touchSlopPx = 8f,
             trackpadSensitivity = 1.6f,
             enableAcceleration = true,
+            snapDoubleTap = true,
             onPointerEvent = { x, y, mask ->
+                currentOnCursorMoved(x, y)
                 currentController.sendPointerEvent(x, y, mask)
                 surfaceHolderRef[0]?.requestRender()
             }
@@ -77,6 +82,11 @@ fun LinuxDesktopSurface(
 
     LaunchedEffect(touchInputMode) {
         touchController.mode = touchInputMode
+        surfaceHolderRef[0]?.requestRender()
+    }
+
+    LaunchedEffect(dragLocked) {
+        touchController.dragLocked = dragLocked
         surfaceHolderRef[0]?.requestRender()
     }
 

@@ -1,17 +1,27 @@
 #!/usr/bin/env python3
-"""PocketStore - Google Play-style GTK-3 App Store for PocketLinux (Alpine 3.20)."""
+"""PocketStore — Multi-Window, Background-Daemon App Store for PocketLinux (Alpine 3.20).
 
+All installs/removals run through pocketlinux-pkgd.py (127.0.0.1:18765), so:
+- Closing PocketStore NEVER stops downloads (they finish in background & appear on Desktop).
+- Multiple PocketStore windows share the exact same live 0-100% progress & queue.
+- Multiple apps can be queued and downloaded in parallel simultaneously.
+- Live Log drawer toggles reliably and displays real-time daemon output.
+"""
+
+import json
 import os
-import shlex
 import shutil
 import subprocess
 import threading
 import time
+import urllib.request
 
 import gi
 
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gdk, GLib, Gtk, Pango  # noqa: E402
+
+DAEMON_URL = "http://127.0.0.1:18765"
 
 CSS = b"""
 window, .background {
@@ -43,6 +53,14 @@ headerbar {
 .installed-badge {
     background-color: #064E3B;
     color: #34D399;
+    border-radius: 8px;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: bold;
+}
+.dl-badge {
+    background-color: #1E3A8A;
+    color: #93C5FD;
     border-radius: 8px;
     padding: 2px 8px;
     font-size: 11px;
@@ -92,7 +110,7 @@ entry {
 }
 textview, textview text {
     background-color: #050811;
-    color: #94A3B8;
+    color: #38BDF8;
     font-family: "DejaVu Sans Mono", monospace;
     font-size: 11px;
 }
@@ -103,11 +121,20 @@ FEATURED_APPS = [
     {
         "name": "Firefox ESR Browser",
         "category": "Internet",
-        "desc": "Full desktop Mozilla Firefox web browser with HTML5, extensions & DevTools.",
+        "desc": "Full desktop Mozilla Firefox browser with HTML5, DevTools & Android DNS Bridge.",
         "packages": ["firefox-esr"],
         "extra_deps": ["ttf-dejavu"],
         "launch": "firefox --no-remote",
         "binary": "firefox",
+    },
+    {
+        "name": "Chromium Web Browser",
+        "category": "Internet",
+        "desc": "Fast open-source Chrome-engine desktop browser (pre-configured for PRoot).",
+        "packages": ["chromium"],
+        "extra_deps": ["ttf-dejavu"],
+        "launch": "chromium --no-sandbox --disable-gpu-sandbox --disable-dev-shm-usage",
+        "binary": "chromium",
     },
     {
         "name": "Luakit Fast Browser",
@@ -139,7 +166,7 @@ FEATURED_APPS = [
     {
         "name": "KolourPaint",
         "category": "Graphics",
-        "desc": "Easy-to-use paint and pixel drawing program (classic Paint experience).",
+        "desc": "Easy-to-use paint and pixel drawing program (classic Windows Paint style).",
         "packages": ["kolourpaint"],
         "extra_deps": [],
         "launch": "kolourpaint",
@@ -238,20 +265,63 @@ FEATURED_APPS = [
 ]
 
 
+def ensure_daemon_running() -> None:
+    try:
+        with urllib.request.urlopen(f"{DAEMON_URL}/api/ping", timeout=0.6):
+            return
+    except Exception:
+        pass
+    subprocess.Popen(
+        ["/usr/local/bin/pocketlinux-pkgd.py"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    for _ in range(25):
+        time.sleep(0.1)
+        try:
+            with urllib.request.urlopen(f"{DAEMON_URL}/api/ping", timeout=0.5):
+                return
+        except Exception:
+            pass
+
+
+def api_get(path: str) -> dict:
+    with urllib.request.urlopen(f"{DAEMON_URL}{path}", timeout=2.0) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+
+def api_post(path: str, payload: dict | None = None) -> dict:
+    raw = json.dumps(payload or {}).encode("utf-8")
+    req = urllib.request.Request(
+        f"{DAEMON_URL}{path}",
+        data=raw,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=3.0) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+
 class PocketStoreWindow(Gtk.Window):
     def __init__(self) -> None:
         super().__init__(title="PocketStore — Linux App Store")
-        self.set_default_size(900, 520)
+        self.set_default_size(920, 540)
         self.set_position(Gtk.WindowPosition.CENTER)
 
-        self.busy = False
-        self.apk_lock = threading.Lock()
-        self.last_apk_update = 0.0
         self.active_category = "All"
+        self.daemon_tasks: list[dict] = []
+        self.last_view_sig = ""
+        self.last_log_text = ""
+        self.log_visible = False
 
         self._apply_css()
         self._build_ui()
         self.refresh_all_views()
+
+        threading.Thread(target=ensure_daemon_running, daemon=True).start()
+        GLib.timeout_add(500, self._poll_daemon)
 
     def _apply_css(self) -> None:
         provider = Gtk.CssProvider()
@@ -266,19 +336,23 @@ class PocketStoreWindow(Gtk.Window):
         header = Gtk.HeaderBar()
         header.set_show_close_button(True)
         header.set_title("PocketStore")
-        header.set_subtitle("Alpine Linux 3.20 · Auto-Dependency Installer")
+        header.set_subtitle("Parallel Background Downloads · Auto-Desktop Integration")
         self.set_titlebar(header)
 
         self.search_entry = Gtk.SearchEntry()
         self.search_entry.set_placeholder_text("Search all Alpine packages...")
-        self.search_entry.set_width_chars(24)
+        self.search_entry.set_width_chars(22)
         self.search_entry.connect("activate", self._on_search_triggered)
         header.pack_end(self.search_entry)
 
+        self.dl_mgr_btn = Gtk.Button(label="⬇ Downloads")
+        self.dl_mgr_btn.get_style_context().add_class("install-btn")
+        self.dl_mgr_btn.connect("clicked", lambda *_: subprocess.Popen(["/usr/local/bin/pocketlinux-downloads.py"]))
+        header.pack_start(self.dl_mgr_btn)
+
         repair_btn = Gtk.Button(label="Fix & Update")
         repair_btn.get_style_context().add_class("repair-btn")
-        repair_btn.set_tooltip_text("Run apk update && apk upgrade && apk fix")
-        repair_btn.connect("clicked", lambda *_: self._run_repair_all())
+        repair_btn.connect("clicked", lambda *_: self._enqueue_repair())
         header.pack_start(repair_btn)
 
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
@@ -296,7 +370,7 @@ class PocketStoreWindow(Gtk.Window):
         # Tab 1: Featured / Popular Home
         home_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         cat_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        for cat in ("All", "Development", "Graphics", "Office", "Internet", "Games", "System"):
+        for cat in ("All", "Internet", "Development", "Graphics", "Office", "Games", "System"):
             btn = Gtk.Button(label=cat)
             btn.connect("clicked", self._on_category_clicked, cat)
             cat_row.pack_start(btn, False, False, 0)
@@ -316,7 +390,7 @@ class PocketStoreWindow(Gtk.Window):
         search_tab = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         search_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self.tab_search_entry = Gtk.Entry()
-        self.tab_search_entry.set_placeholder_text("Type package name (e.g. python, vim, firefox, sdl2)...")
+        self.tab_search_entry.set_placeholder_text("Type package name (e.g. python, vim, firefox, chromium, vlc)...")
         self.tab_search_entry.connect("activate", self._on_tab_search_clicked)
         search_btn = Gtk.Button(label="Search")
         search_btn.get_style_context().add_class("install-btn")
@@ -341,16 +415,17 @@ class PocketStoreWindow(Gtk.Window):
 
         root.pack_start(self.stack, True, True, 0)
 
-        # Bottom live progress & log drawer
+        # Bottom live daemon status & FIXED Log toggle drawer
         self.status_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        self.status_label = Gtk.Label(label="Ready · Browse apps or search Alpine repositories")
+        self.status_label = Gtk.Label(label="Ready · Downloads continue in background even if you close this window")
         self.status_label.set_xalign(0.0)
         self.status_label.set_ellipsize(Pango.EllipsizeMode.END)
-        self.progress = Gtk.ProgressBar()
-        self.progress.set_size_request(140, -1)
-        self.progress.set_no_show_all(True)
 
-        self.log_toggle = Gtk.ToggleButton(label="Log")
+        self.progress = Gtk.ProgressBar()
+        self.progress.set_size_request(150, -1)
+        self.progress.set_show_text(True)
+
+        self.log_toggle = Gtk.ToggleButton(label="Show Log")
         self.log_toggle.connect("toggled", self._on_toggle_log)
         self.status_bar.pack_start(self.status_label, True, True, 0)
         self.status_bar.pack_start(self.progress, False, False, 0)
@@ -361,16 +436,44 @@ class PocketStoreWindow(Gtk.Window):
         self.log_view.set_editable(False)
         self.log_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
         self.log_scroll = Gtk.ScrolledWindow()
-        self.log_scroll.set_size_request(-1, 120)
+        self.log_scroll.set_size_request(-1, 130)
         self.log_scroll.add(self.log_view)
-        self.log_scroll.set_no_show_all(True)
         root.pack_start(self.log_scroll, False, False, 0)
 
+    def show_initial(self) -> None:
+        self.show_all()
+        # Hide optional widgets AFTER show_all (never use set_no_show_all(True) + show_all()!)
+        self.progress.hide()
+        self.log_scroll.hide()
+
     def _on_toggle_log(self, btn: Gtk.ToggleButton) -> None:
-        if btn.get_active():
-            self.log_scroll.show_all()
+        self.log_visible = btn.get_active()
+        if self.log_visible:
+            btn.set_label("Hide Log")
+            self.log_scroll.show()
+            self.log_view.show()
+            self._fetch_log_now()
         else:
+            btn.set_label("Show Log")
             self.log_scroll.hide()
+
+    def _fetch_log_now(self) -> None:
+        def worker() -> None:
+            try:
+                lg = api_get("/api/logs")
+                GLib.idle_add(self._set_log_text, lg.get("log", ""))
+            except Exception:
+                pass
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _set_log_text(self, text: str) -> None:
+        if text == self.last_log_text:
+            return
+        self.last_log_text = text
+        buf = self.log_view.get_buffer()
+        buf.set_text(text)
+        adj = self.log_scroll.get_vadjustment()
+        GLib.idle_add(lambda: adj.set_value(adj.get_upper()))
 
     def _on_category_clicked(self, _btn: Gtk.Button, cat: str) -> None:
         self.active_category = cat
@@ -378,6 +481,14 @@ class PocketStoreWindow(Gtk.Window):
 
     def _is_app_installed(self, app: dict) -> bool:
         return shutil.which(app["binary"]) is not None
+
+    def _active_task_for_packages(self, pkgs: list[str]) -> dict | None:
+        pkg_set = set(pkgs)
+        for t in self.daemon_tasks:
+            if t.get("status") in ("queued", "resolving", "downloading", "installing"):
+                if set(t.get("packages", [])) & pkg_set:
+                    return t
+        return None
 
     def _clear_box(self, box: Gtk.Box) -> None:
         for child in box.get_children():
@@ -399,7 +510,7 @@ class PocketStoreWindow(Gtk.Window):
         self._clear_box(self.installed_box)
         installed = [a for a in FEATURED_APPS if self._is_app_installed(a)]
         if not installed:
-            lbl = Gtk.Label(label="No featured apps installed yet. Install any app from Popular & Featured!")
+            lbl = Gtk.Label(label="No featured apps installed yet. Install multiple apps in parallel from Popular & Featured!")
             lbl.set_margin_top(24)
             self.installed_box.pack_start(lbl, False, False, 0)
         else:
@@ -409,6 +520,8 @@ class PocketStoreWindow(Gtk.Window):
 
     def _build_app_card(self, app: dict) -> Gtk.Widget:
         installed = self._is_app_installed(app)
+        active_task = self._active_task_for_packages(app["packages"])
+
         card = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         card.get_style_context().add_class("store-card")
 
@@ -424,7 +537,12 @@ class PocketStoreWindow(Gtk.Window):
         cat_lbl.get_style_context().add_class("cat-badge")
         top.pack_start(cat_lbl, False, False, 0)
 
-        if installed:
+        if active_task:
+            pct = float(active_task.get("progress", 0.0))
+            dl_lbl = Gtk.Label(label=f"{active_task['status'].capitalize()} {pct:.0f}%")
+            dl_lbl.get_style_context().add_class("dl-badge")
+            top.pack_start(dl_lbl, False, False, 0)
+        elif installed:
             inst_lbl = Gtk.Label(label="Installed")
             inst_lbl.get_style_context().add_class("installed-badge")
             top.pack_start(inst_lbl, False, False, 0)
@@ -438,7 +556,18 @@ class PocketStoreWindow(Gtk.Window):
 
         actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         actions.set_valign(Gtk.Align.CENTER)
-        if installed:
+        if active_task:
+            tid = active_task["id"]
+            prog_btn = Gtk.Button(label=f"{float(active_task.get('progress', 0)):.0f}% · View")
+            prog_btn.get_style_context().add_class("repair-btn")
+            prog_btn.connect("clicked", lambda *_: subprocess.Popen(["/usr/local/bin/pocketlinux-downloads.py"]))
+            actions.pack_start(prog_btn, False, False, 0)
+
+            cancel_btn = Gtk.Button(label="Cancel")
+            cancel_btn.get_style_context().add_class("remove-btn")
+            cancel_btn.connect("clicked", lambda _b, i=tid: self._async_post("/api/cancel", {"id": i}))
+            actions.pack_start(cancel_btn, False, False, 0)
+        elif installed:
             open_btn = Gtk.Button(label="Open")
             open_btn.get_style_context().add_class("open-btn")
             open_btn.connect("clicked", lambda *_: self._launch_command(app["launch"], app["name"]))
@@ -446,13 +575,13 @@ class PocketStoreWindow(Gtk.Window):
 
             rm_btn = Gtk.Button(label="Remove")
             rm_btn.get_style_context().add_class("remove-btn")
-            rm_btn.connect("clicked", lambda *_: self._remove_packages(app["packages"], app["name"]))
+            rm_btn.connect("clicked", lambda *_: self._enqueue_remove(app["packages"], app["name"]))
             actions.pack_start(rm_btn, False, False, 0)
         else:
             inst_btn = Gtk.Button(label="Install")
             inst_btn.get_style_context().add_class("install-btn")
             pkgs = app["packages"] + app.get("extra_deps", [])
-            inst_btn.connect("clicked", lambda *_: self._install_packages(pkgs, app["name"]))
+            inst_btn.connect("clicked", lambda *_: self._enqueue_install(pkgs, app["name"], app["launch"]))
             actions.pack_start(inst_btn, False, False, 0)
 
         card.pack_start(actions, False, False, 0)
@@ -479,30 +608,18 @@ class PocketStoreWindow(Gtk.Window):
         self.search_results_box.show_all()
 
         def worker() -> None:
-            with self.apk_lock:
-                subprocess.run(["/usr/local/bin/fix-dns.sh"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                if time.time() - self.last_apk_update > 3600:
-                    try:
-                        subprocess.run(
-                            ["apk", "--wait", "10", "--timeout", "20", "update"],
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                            timeout=30,
-                        )
-                        self.last_apk_update = time.time()
-                    except Exception:
-                        pass
-                try:
-                    res = subprocess.run(
-                        ["apk", "--wait", "10", "--timeout", "20", "search", "-v", query],
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        text=True,
-                        timeout=30,
-                    )
-                    out_lines = res.stdout.splitlines()
-                except Exception:
-                    out_lines = []
+            subprocess.run(["/usr/local/bin/fix-dns.sh"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                res = subprocess.run(
+                    ["/bin/sh", "-c", f". /etc/profile.d/pocketlinux-gpu.sh 2>/dev/null || true; apk search -v -- {query!r}"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=30,
+                )
+                out_lines = res.stdout.splitlines()
+            except Exception:
+                out_lines = []
             items = []
             seen = set()
             for line in out_lines:
@@ -548,99 +665,86 @@ class PocketStoreWindow(Gtk.Window):
                 btn = Gtk.Button(label="Install")
                 btn.get_style_context().add_class("install-btn")
                 btn.set_valign(Gtk.Align.CENTER)
-                btn.connect("clicked", lambda _b, p=pkg_name: self._install_packages([p], p))
+                btn.connect("clicked", lambda _b, p=pkg_name: self._enqueue_install([p], p, p))
                 card.pack_start(btn, False, False, 0)
                 self.search_results_box.pack_start(card, False, False, 0)
         self.search_results_box.show_all()
 
-    def _append_log(self, text: str) -> None:
-        buf = self.log_view.get_buffer()
-        buf.insert(buf.get_end_iter(), text)
-        adj = self.log_scroll.get_vadjustment()
-        adj.set_value(adj.get_upper())
-
-    def _set_busy(self, busy: bool, status: str) -> None:
-        self.busy = busy
-        self.status_label.set_text(status)
-        if busy:
-            self.progress.show()
-            self.log_toggle.set_active(True)
-            GLib.timeout_add(120, self._pulse_progress)
-        else:
-            self.progress.hide()
-
-    def _pulse_progress(self) -> bool:
-        if self.busy:
-            self.progress.pulse()
-            return True
-        return False
-
-    def _run_apk_pipeline(self, title: str, shell_cmd: str) -> None:
-        if self.busy:
-            self.status_label.set_text("Another installation is already running — please wait...")
-            return
-        self._set_busy(True, f"{title}...")
-        self._append_log(f"\n=== {title} ===\n$ {shell_cmd}\n")
-
+    def _async_post(self, path: str, payload: dict) -> None:
         def worker() -> None:
-            with self.apk_lock:
-                env = os.environ.copy()
-                env["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-                proc = subprocess.Popen(
-                    ["/bin/sh", "-c", shell_cmd],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    env=env,
-                )
-                assert proc.stdout is not None
-                for line in proc.stdout:
-                    GLib.idle_add(self._append_log, line)
-                code = proc.wait()
-            if code == 0:
-                msg = f"Completed: {title}"
-            else:
-                msg = f"Failed ({code}): {title} — check Log"
-            GLib.idle_add(self._on_pipeline_done, msg)
-
+            try:
+                ensure_daemon_running()
+                api_post(path, payload)
+            except Exception:
+                pass
         threading.Thread(target=worker, daemon=True).start()
 
-    def _on_pipeline_done(self, status_msg: str) -> None:
-        self._set_busy(False, status_msg)
-        self.refresh_all_views()
+    def _enqueue_install(self, packages: list, display_name: str, launch: str = "") -> None:
+        self.status_label.set_text(f"Queued {display_name} in background Download Manager...")
+        self._async_post("/api/install", {"name": display_name, "packages": packages, "launch": launch})
 
-    def _install_packages(self, packages: list, display_name: str) -> None:
-        quoted = " ".join(shlex.quote(p) for p in packages)
-        if time.time() - self.last_apk_update > 1800:
-            cmd = f"apk update && apk add --upgrade {quoted}"
-            self.last_apk_update = time.time()
+    def _enqueue_remove(self, packages: list, display_name: str) -> None:
+        self.status_label.set_text(f"Queued removal of {display_name}...")
+        self._async_post("/api/remove", {"name": display_name, "packages": packages})
+
+    def _enqueue_repair(self) -> None:
+        self.status_label.set_text("Queued System Update & Library Repair in background...")
+        self._async_post("/api/repair", {})
+
+    def _poll_daemon(self) -> bool:
+        def worker() -> None:
+            try:
+                st = api_get("/api/status")
+                lg = api_get("/api/logs") if self.log_visible else None
+                GLib.idle_add(self._apply_daemon_state, st, lg)
+            except Exception:
+                ensure_daemon_running()
+        threading.Thread(target=worker, daemon=True).start()
+        return True
+
+    def _apply_daemon_state(self, st: dict, lg: dict | None) -> None:
+        self.daemon_tasks = st.get("tasks", [])
+        active = [t for t in self.daemon_tasks if t["status"] in ("queued", "resolving", "downloading", "installing")]
+        if active:
+            self.dl_mgr_btn.set_label(f"⬇ Downloads ({len(active)})")
+            avg_pct = sum(float(t.get("progress", 0.0)) for t in active) / len(active)
+            spd_bps = st.get("total_speed_bps", 0)
+            spd_str = f"{spd_bps / (1024*1024):.2f} MB/s" if spd_bps >= 1024 * 1024 else f"{spd_bps / 1024:.0f} KB/s"
+            names = ", ".join(t["name"] for t in active[:2])
+            if len(active) > 2:
+                names += f" +{len(active)-2}"
+            self.status_label.set_text(f"Background: {names} ({spd_str})")
+            self.progress.set_fraction(max(0.0, min(1.0, avg_pct / 100.0)))
+            self.progress.set_text(f"{avg_pct:.0f}%")
+            self.progress.show()
         else:
-            cmd = f"apk add --upgrade {quoted} || (apk update && apk add --upgrade {quoted})"
-        self._run_apk_pipeline(f"Installing {display_name}", cmd)
+            self.dl_mgr_btn.set_label("⬇ Downloads")
+            self.progress.hide()
+            if self.daemon_tasks:
+                latest = self.daemon_tasks[0]
+                self.status_label.set_text(f"Last task: {latest['name']} — {latest['stage']}")
 
-    def _remove_packages(self, packages: list, display_name: str) -> None:
-        quoted = " ".join(shlex.quote(p) for p in packages)
-        cmd = f"apk del {quoted}"
-        self._run_apk_pipeline(f"Removing {display_name}", cmd)
+        installed_sig = tuple(self._is_app_installed(a) for a in FEATURED_APPS)
+        task_sig = tuple((t["id"], t["status"], int(float(t.get("progress", 0.0)))) for t in active)
+        sig = f"{self.active_category}|{installed_sig}|{task_sig}"
+        if sig != self.last_view_sig:
+            self.last_view_sig = sig
+            self.refresh_all_views()
 
-    def _run_repair_all(self) -> None:
-        self.last_apk_update = time.time()
-        self._run_apk_pipeline(
-            "Unlocking DB, Updating & Repairing All Libraries",
-            "rm -f /lib/apk/db/lock 2>/dev/null || true; apk update && apk upgrade && apk fix",
-        )
+        if lg and self.log_visible:
+            self._set_log_text(lg.get("log", ""))
 
     def _launch_command(self, cmd: str, name: str) -> None:
         self.status_label.set_text(f"Launching {name}...")
         env = os.environ.copy()
         env.setdefault("DISPLAY", ":1")
-        subprocess.Popen(["/bin/sh", "-c", f". /etc/profile.d/pocketlinux-gpu.sh 2>/dev/null || true; {cmd}"], env=env)
+        subprocess.Popen(["/bin/sh", "-c", f". /etc/profile.d/pocketlinux-gpu.sh 2>/dev/null || true; exec {cmd}"], env=env)
 
 
 def main() -> None:
     win = PocketStoreWindow()
     win.connect("destroy", Gtk.main_quit)
-    win.show_all()
+    win.show_initial()
     Gtk.main()
 
 

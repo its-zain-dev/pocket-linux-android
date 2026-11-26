@@ -2,6 +2,31 @@
 
 All notable changes to **PocketLinux for Android** are documented in this file.
 
+## [2.1.0] - 2026-11-26
+
+### Added
+- **Standalone Parallel Download Manager (`pocketlinux-downloads.py`) & Detached Background Daemon (`pocketlinux-pkgd.py`)**:
+  - Downloads and installations now run in a persistent detached HTTP daemon (`127.0.0.1:18765`), surviving closing `PocketStore` windows and syncing live across unlimited Store / Download Manager windows.
+  - Supports installing multiple apps simultaneously with multi-stream parallel `.apk` downloading (up to 6 HTTP workers), byte-accurate `0%–100%` progress bars, live `KB/s` / `MB/s` speed, direct URL multi-range downloading into `/root/Downloads`, Cancel/Retry/Clear, and a working live Log Viewer in both `PocketStore` and `Downloads`.
+- **Movable Windows-Style Desktop (`pocketlinux-desktop.py`) & Automatic App Sync (`pocketlinux-sync-apps.py`)**:
+  - Interactive GTK-3 + Cairo Desktop canvas allowing free drag-and-drop repositioning of icons anywhere on screen (with snap-to-grid + swap OR pixel-free placement persisted to `desktop_layout.json`), right-click Windows-style View/Sort/New context menu, and single-tap or double-click open.
+  - Every app installed via `PocketStore` or `apk` is automatically synced across **Desktop**, **Start Menu → Installed Apps**, **File Manager → Applications** (`/root/Applications` + `/etc/xdg/menus/lxde-applications.menu`), and Android's **Apps & System** tab (`installed_apps.json`).
+- **Windows-11-Inspired Settings Center (`pocketlinux-settings.py`)**:
+  - Complete 8-section sidebar redesign (`System & Speed`, `Graphics & GPU`, `Display & Windows`, `Personalization`, `Apps & Downloads`, `Network & Browser`, `Privacy & Storage`, `Repair & About`) with live Accent Color themes, 4 built-in Wallpapers + custom image chooser, customizable Taskbar position/height/clock/auto-hide, DPI scaling, Desktop icon arrangement, and live `VirGL Server Log` viewer.
+- **Phone Storage Access + Privacy Mode Toggle**:
+  - Added Android storage permission requests (`READ/WRITE_EXTERNAL_STORAGE` on Android 8–10 and `MANAGE_EXTERNAL_STORAGE` on Android 11+) so `/mnt/phone` shows device storage cleanly.
+  - Added **Privacy Mode (`Hide Phone Files`)** toggle in both Android's floating menu (`🔒 Phone Files: Empty / Shown`) and Linux Settings to isolate `/mnt/phone` as completely empty on demand.
+- **Upgraded Touch Controls & Clean App Exit (`⏻ Exit & Stop`)**:
+  - Added touch double-tap coordinate snapping (`snapDoubleTap`), **Drag Lock** toggle for effortless window and desktop-icon dragging, optional floating **Quick Touch Bar**, and real-cursor Right Click.
+  - Added **3 clean ways to fully stop PocketLinux & remove its notification**: a red **`⏻ Exit & Stop`** button in the top-right drawer, an **`Exit & Stop`** action button right on the Android notification (plus tap notification to reopen), and automatic `onTaskRemoved()` shutdown when swiping PocketLinux away from Android Recents.
+
+### Fixed
+- **Adreno 5xx/6xx/7xx & Mali VirGL 3D Crash (`glxgears` 1-second black screen)**:
+  - Applied Android-specific `virglrenderer 1.0.1` patches (`scripts/ci/build-virgl.sh`): disables `feat_dual_src_blend` on `__ANDROID__`, uses GLES 3 + `1x1` Pbuffer EGL context, disables failing `EGL_SYNC_NATIVE_FENCE_ANDROID` init path, negotiates safe `memfd`/`ashmem`/Protocol-v0 SHM, tees VirGL logs to `/tmp/.virgl_ipc/virgl_server.log`, and stops forcing `MESA_GL_VERSION_OVERRIDE=4.0` by default on `virpipe`.
+- **Browser DNS & PRoot Sandbox Failures (`Error resolving ...: Try again`)**:
+  - Added `AndroidNetworkBridge.kt` (`127.0.0.1:18080` local HTTP/HTTPS CONNECT proxy backed by Android's native resolver) + `ConnectivityManager` live DNS sync + automatic `fix-dns.sh` activation + Firefox `policies.json` + PRoot-safe browser env vars (`MOZ_DISABLE_*_SANDBOX=1`, `WEBKIT_DISABLE_*`, Chromium `--no-sandbox`) so **Firefox ESR**, **Chromium**, and **Luakit** browse cleanly even behind Android Private DNS or VPNs.
+- **Fixed `PocketStore` Log Toggle Button**: Removed GTK-3 `set_no_show_all(True)` bug so clicking `Log` reliably opens and hides the live installation log console.
+
 ## [2.0.0] - 2026-11-26
 
 ### Added & Performance

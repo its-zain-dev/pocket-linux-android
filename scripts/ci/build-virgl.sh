@@ -102,11 +102,27 @@ s = s.replace(
 open(p, "w", encoding="utf-8").write(s)
 
 # 4. vrend_renderer.c: replace C11 timespec_get (API 29+) with POSIX clock_gettime (API 1+)
+#    AND disable feat_dual_src_blend on Android (known Adreno 5xx/6xx GLES driver crash!)
 p = os.path.join(root, "src/vrend_renderer.c")
 s = open(p, encoding="utf-8").read()
 s = s.replace(
     "ret = timespec_get(&ts, TIME_UTC);",
     "ret = (clock_gettime(CLOCK_REALTIME, &ts) == 0 ? TIME_UTC : 0);",
+)
+s = s.replace(
+    """static inline bool has_feature(enum features_id feature_id)
+{""",
+    """static inline bool has_feature(enum features_id feature_id)
+{
+#ifdef __ANDROID__
+   if (feature_id == feat_dual_src_blend)
+      return false;
+#endif""",
+    1,
+)
+s = s.replace(
+    "grctx->shader_cfg.has_dual_src_blend = has_feature(feat_dual_src_blend);",
+    "grctx->shader_cfg.has_dual_src_blend = false;",
 )
 open(p, "w", encoding="utf-8").write(s)
 
@@ -171,7 +187,8 @@ s = s.replace(
 )
 open(p, "w", encoding="utf-8").write(s)
 
-# 6. vrend_winsys_egl.c: native Android EGL_DEFAULT_DISPLAY + 1x1 Pbuffer fallback for Adreno 5xx & Mali GPUs
+# 6. vrend_winsys_egl.c: native Android EGL_DEFAULT_DISPLAY, GLES 3->2 context init,
+#    unconditional 1x1 Pbuffer surface (fixes Adreno 5xx black screen), safe fence handling & EGL logging
 p = os.path.join(root, "src/vrend_winsys_egl.c")
 s = open(p, encoding="utf-8").read()
 s = s.replace(
@@ -229,15 +246,73 @@ s = s.replace(
     1,
 )
 s = s.replace(
-    """   eglMakeCurrent(egl->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
+    """#ifdef VIRGL_EGL_DEBUG
+   virgl_debug("EGL major/minor: %d.%d\\n", major, minor);
+   virgl_debug("EGL version: %s\\n",
+           eglQueryString(egl->egl_display, EGL_VERSION));
+   virgl_debug("EGL vendor: %s\\n",
+           eglQueryString(egl->egl_display, EGL_VENDOR));
+   virgl_debug("EGL extensions: %s\\n", extensions);
+#endif""",
+    """   virgl_info("EGL major/minor: %d.%d | version: %s | vendor: %s\\n",
+           major, minor,
+           eglQueryString(egl->egl_display, EGL_VERSION),
+           eglQueryString(egl->egl_display, EGL_VENDOR));""",
+    1,
+)
+s = s.replace(
+    """   egl->egl_ctx = eglCreateContext(egl->egl_display, egl->egl_conf, EGL_NO_CONTEXT,
+                                   ctx_att);
+   if (!egl->egl_ctx)
+      goto fail;
+
+   eglMakeCurrent(egl->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
                   egl->egl_ctx);""",
-    """   egl->dummy_surface = EGL_NO_SURFACE;
-   if (!has_bit(egl->extension_bits, EGL_KHR_SURFACELESS_CONTEXT)) {
+    """#ifdef __ANDROID__
+   {
+      static const EGLint ctx_att_es3[] = {
+         EGL_CONTEXT_CLIENT_VERSION, 3,
+         EGL_NONE
+      };
+      egl->egl_ctx = eglCreateContext(egl->egl_display, egl->egl_conf, EGL_NO_CONTEXT,
+                                      gles ? ctx_att_es3 : ctx_att);
+      if (!egl->egl_ctx) {
+         egl->egl_ctx = eglCreateContext(egl->egl_display, egl->egl_conf, EGL_NO_CONTEXT,
+                                         ctx_att);
+      }
+   }
+   if (!egl->egl_ctx) {
+      virgl_error("Android eglCreateContext failed: 0x%x\\n", eglGetError());
+      goto fail;
+   }
+
+   {
       static const EGLint pbuf_att[] = { EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE };
       egl->dummy_surface = eglCreatePbufferSurface(egl->egl_display, egl->egl_conf, pbuf_att);
+      if (egl->dummy_surface == EGL_NO_SURFACE) {
+         virgl_info("1x1 Pbuffer unavailable (0x%x), falling back to EGL_NO_SURFACE\\n", eglGetError());
+      }
    }
-   eglMakeCurrent(egl->egl_display, egl->dummy_surface, egl->dummy_surface,
-                  egl->egl_ctx);""",
+   if (!eglMakeCurrent(egl->egl_display, egl->dummy_surface, egl->dummy_surface, egl->egl_ctx)) {
+      if (egl->dummy_surface != EGL_NO_SURFACE) {
+         eglDestroySurface(egl->egl_display, egl->dummy_surface);
+         egl->dummy_surface = EGL_NO_SURFACE;
+      }
+      if (!eglMakeCurrent(egl->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, egl->egl_ctx)) {
+         virgl_error("Android eglMakeCurrent failed: 0x%x\\n", eglGetError());
+         goto fail;
+      }
+   }
+#else
+   egl->egl_ctx = eglCreateContext(egl->egl_display, egl->egl_conf, EGL_NO_CONTEXT,
+                                   ctx_att);
+   if (!egl->egl_ctx)
+      goto fail;
+
+   egl->dummy_surface = EGL_NO_SURFACE;
+   eglMakeCurrent(egl->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
+                  egl->egl_ctx);
+#endif""",
     1,
 )
 s = s.replace(
@@ -270,6 +345,13 @@ s = s.replace(
                                  vparams->shared ? eglGetCurrentContext() : EGL_NO_CONTEXT,
                                  fallback_att);
    }
+   if (!egl_ctx) {
+      EGLint es2_att[] = { EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE };
+      egl_ctx = eglCreateContext(egl->egl_display,
+                                 egl->egl_conf,
+                                 vparams->shared ? eglGetCurrentContext() : EGL_NO_CONTEXT,
+                                 es2_att);
+   }
    return (virgl_renderer_gl_context)egl_ctx;""",
     1,
 )
@@ -286,14 +368,35 @@ s = s.replace(
    EGLContext egl_ctx = (EGLContext)virglctx;
    EGLSurface surf = egl_ctx ? egl->dummy_surface : EGL_NO_SURFACE;
 
-   return eglMakeCurrent(egl->egl_display, surf, surf,
-                         egl_ctx) ? 0 : -1;
+   if (eglMakeCurrent(egl->egl_display, surf, surf, egl_ctx))
+      return 0;
+   if (surf != EGL_NO_SURFACE)
+      return eglMakeCurrent(egl->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, egl_ctx) ? 0 : -1;
+   return -1;
+}""",
+    1,
+)
+s = s.replace(
+    """bool virgl_egl_supports_fences(struct virgl_egl *egl)
+{
+   return (egl && has_bit(egl->extension_bits, EGL_KHR_FENCE_SYNC_ANDROID));
+}""",
+    """bool virgl_egl_supports_fences(struct virgl_egl *egl)
+{
+#ifdef __ANDROID__
+   /* Avoid EGL_SYNC_NATIVE_FENCE_ANDROID init failures on Adreno 5xx/older Mali drivers */
+   (void)egl;
+   return false;
+#else
+   return (egl && has_bit(egl->extension_bits, EGL_KHR_FENCE_SYNC_ANDROID));
+#endif
 }""",
     1,
 )
 open(p, "w", encoding="utf-8").write(s)
 
-# 7. vtest/vtest_shm.c: avoid NDK memfd_create symbol conflict & add TMPDIR zero-copy SHM fallback for Android SELinux
+# 7. vtest/vtest_shm.c: safe memfd -> /dev/ashmem fallback; if neither supported, return 0
+#    so vtest cleanly negotiates protocol version 0 (guaranteed compatible with PRoot & SELinux!)
 p = os.path.join(root, "vtest/vtest_shm.c")
 open(p, "w", encoding="utf-8").write("""#include "util.h"
 #include "vtest_shm.h"
@@ -303,30 +406,38 @@ open(p, "w", encoding="utf-8").write("""#include "util.h"
 #include <string.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <sys/ioctl.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 
-static int vtest_open_anon_shm(const char *name, unsigned int flags)
+static int vtest_memfd_open(const char *name, unsigned int flags)
 {
-   int fd = -1;
 #ifdef __NR_memfd_create
-   fd = (int)syscall(__NR_memfd_create, name, flags);
+   int fd = (int)syscall(__NR_memfd_create, name, flags);
    if (fd >= 0)
       return fd;
+   if (flags != 0) {
+      fd = (int)syscall(__NR_memfd_create, name, 0);
+      if (fd >= 0)
+         return fd;
+   }
 #else
    (void)name;
    (void)flags;
 #endif
-   const char *tmpdir = getenv("TMPDIR");
-   if (!tmpdir || !tmpdir[0])
-      tmpdir = "/data/local/tmp";
-   char tmpl[512];
-   snprintf(tmpl, sizeof(tmpl), "%s/.vtest-shm-XXXXXX", tmpdir);
-   fd = mkstemp(tmpl);
-   if (fd >= 0) {
-      unlink(tmpl);
-      fcntl(fd, F_SETFD, FD_CLOEXEC);
+   return -1;
+}
+
+static int vtest_ashmem_open(size_t size)
+{
+   int fd = open("/dev/ashmem", O_RDWR | O_CLOEXEC);
+   if (fd < 0)
+      return -1;
+   if (ioctl(fd, _IOW(0x77, 3, size_t), size) < 0) {
+      close(fd);
+      return -1;
    }
+   fcntl(fd, F_SETFD, FD_CLOEXEC);
    return fd;
 }
 
@@ -336,24 +447,33 @@ int vtest_new_shm(uint32_t handle, size_t size)
    char name[64];
    snprintf(name, sizeof(name), "vtest-res-%u", handle);
 
-   fd = vtest_open_anon_shm(name, MFD_ALLOW_SEALING | MFD_CLOEXEC);
-   if (fd < 0)
-      return report_failed_call("vtest_open_anon_shm", -errno);
-
-   ret = ftruncate(fd, (off_t)size);
-   if (ret < 0) {
-      close(fd);
-      return report_failed_call("ftruncate", -errno);
+   fd = vtest_memfd_open(name, MFD_ALLOW_SEALING);
+   if (fd >= 0) {
+      ret = ftruncate(fd, (off_t)size);
+      if (ret < 0) {
+         close(fd);
+         return report_failed_call("ftruncate", -errno);
+      }
+      return fd;
    }
 
-   return fd;
+   fd = vtest_ashmem_open(size);
+   if (fd >= 0)
+      return fd;
+
+   return report_failed_call("vtest_new_shm", -errno);
 }
 
 int vtest_shm_check(void)
 {
-   int mfd = vtest_open_anon_shm("vtest-check", MFD_ALLOW_SEALING | MFD_CLOEXEC);
-   if (mfd >= 0) {
-      close(mfd);
+   int fd = vtest_memfd_open("vtest-check", MFD_ALLOW_SEALING);
+   if (fd >= 0) {
+      close(fd);
+      return 1;
+   }
+   fd = vtest_ashmem_open(4096);
+   if (fd >= 0) {
+      close(fd);
       return 1;
    }
    return 0;

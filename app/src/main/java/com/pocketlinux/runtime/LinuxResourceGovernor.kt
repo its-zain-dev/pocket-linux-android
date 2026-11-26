@@ -3,8 +3,10 @@ package com.pocketlinux.runtime
 import android.app.ActivityManager
 import android.content.ComponentCallbacks2
 import android.content.Context
+import android.net.ConnectivityManager
 import android.os.SystemClock
 import java.io.File
+import java.net.Inet4Address
 import kotlin.math.max
 
 /**
@@ -157,6 +159,48 @@ object LinuxResourceGovernor {
                     )
                 }
             }
+        }
+    }
+
+    /**
+     * Syncs the active Android network's real DNS servers (Wi-Fi router / cellular ISP / VPN)
+     * into `<rootfs>/etc/resolv.conf` before public fallbacks so browsers and CLI tools resolve
+     * hostnames even when external UDP 53 to 8.8.8.8 is blocked by the carrier/router.
+     */
+    fun syncResolvConf(context: Context?, rootfsDir: File) {
+        if (!rootfsDir.isDirectory) return
+        val etcDir = File(rootfsDir, "etc")
+        if (!etcDir.isDirectory) return
+        runCatching {
+            val servers = LinkedHashSet<String>()
+            if (context != null) {
+                runCatching {
+                    val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                    val activeNet = cm?.activeNetwork
+                    val lp = if (activeNet != null) cm.getLinkProperties(activeNet) else null
+                    val dnsList = lp?.dnsServers.orEmpty()
+                    // IPv4 DNS servers first (Alpine musl handles IPv4 fastest & avoids IPv6 timeout stalls)
+                    dnsList.filterIsInstance<Inet4Address>()
+                        .mapNotNull { it.hostAddress?.substringBefore('%') }
+                        .filter { it.isNotBlank() && !it.startsWith("127.") }
+                        .forEach { servers.add(it) }
+                    dnsList.filter { it !is Inet4Address }
+                        .mapNotNull { it.hostAddress?.substringBefore('%') }
+                        .filter { it.isNotBlank() && it != "::1" }
+                        .forEach { servers.add(it) }
+                }
+            }
+            servers.add("1.1.1.1")
+            servers.add("8.8.8.8")
+            servers.add("9.9.9.9")
+
+            val content = buildString {
+                for (ip in servers.take(6)) {
+                    append("nameserver ").append(ip).append('\n')
+                }
+                append("options timeout:2 attempts:2\n")
+            }
+            File(etcDir, "resolv.conf").writeText(content)
         }
     }
 

@@ -61,6 +61,10 @@ fun DesktopTab(
     runtimeState: RuntimeState = RuntimeState.Ready("127.0.0.1", 5901, 1L, 1L),
     softKeyboardTrigger: Int = 0,
     touchMode: TouchInputMode = TouchInputMode.DIRECT_TAP,
+    dragLocked: Boolean = false,
+    showQuickControls: Boolean = false,
+    onCursorMoved: (Int, Int) -> Unit = { _, _ -> },
+    onToggleDragLock: () -> Unit = {},
     onToggleTouchMode: () -> Unit = {},
     onRequestKeyboard: () -> Unit = {},
     onRestartRuntime: () -> Unit = {},
@@ -69,6 +73,8 @@ fun DesktopTab(
     var ctrlLatched by remember { mutableStateOf(false) }
     var altLatched by remember { mutableStateOf(false) }
     var hideKeyboardTrigger by remember { mutableIntStateOf(0) }
+    var lastCursorX by remember { mutableIntStateOf(-1) }
+    var lastCursorY by remember { mutableIntStateOf(-1) }
     val scope = rememberCoroutineScope()
 
     val density = LocalDensity.current
@@ -89,11 +95,24 @@ fun DesktopTab(
         }
     }
 
-    fun sendRightClickCenter() {
-        val cx = (rfbController.desktopWidth / 2).coerceAtLeast(1)
-        val cy = (rfbController.desktopHeight / 2).coerceAtLeast(1)
+    fun activeCursorPoint(): Pair<Int, Int> {
+        val cx = if (lastCursorX in 0 until rfbController.desktopWidth) {
+            lastCursorX
+        } else {
+            (rfbController.desktopWidth / 2).coerceAtLeast(1)
+        }
+        val cy = if (lastCursorY in 0 until rfbController.desktopHeight) {
+            lastCursorY
+        } else {
+            (rfbController.desktopHeight / 2).coerceAtLeast(1)
+        }
+        return cx to cy
+    }
+
+    fun sendButtonTap(mask: Int) {
+        val (cx, cy) = activeCursorPoint()
         scope.launch {
-            rfbController.sendPointerEvent(cx, cy, RfbConstants.BUTTON_RIGHT)
+            rfbController.sendPointerEvent(cx, cy, mask)
             delay(45L)
             rfbController.sendPointerEvent(cx, cy, 0)
         }
@@ -108,6 +127,12 @@ fun DesktopTab(
         LinuxDesktopSurface(
             controller = rfbController,
             touchInputMode = touchMode,
+            dragLocked = dragLocked,
+            onCursorMoved = { x, y ->
+                lastCursorX = x
+                lastCursorY = y
+                onCursorMoved(x, y)
+            },
             softKeyboardTrigger = softKeyboardTrigger,
             hideKeyboardTrigger = hideKeyboardTrigger,
             autoResizeDesktop = true,
@@ -119,6 +144,42 @@ fun DesktopTab(
                 runtimeState = runtimeState,
                 onRestartRuntime = onRestartRuntime
             )
+        }
+
+        // Optional compact floating quick-control pad (when enabled by user in menu)
+        AnimatedVisibility(
+            visible = showQuickControls && !isKeyboardVisible && runtimeState is RuntimeState.Ready,
+            enter = fadeIn() + slideInVertically { it },
+            exit = fadeOut() + slideOutVertically { it },
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 48.dp, start = 8.dp, end = 8.dp)
+        ) {
+            Surface(
+                color = PocketLinuxColors.Surface.copy(alpha = 0.88f),
+                shape = RoundedCornerShape(14.dp),
+                border = BorderStroke(1.dp, PocketLinuxColors.Border)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 8.dp, vertical = 5.dp),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    ImeControlKey(
+                        label = if (touchMode == TouchInputMode.DIRECT_TAP) "Tap" else "Trackpad",
+                        active = touchMode == TouchInputMode.TRACKPAD
+                    ) { onToggleTouchMode() }
+                    ImeControlKey("L-Click") { sendButtonTap(RfbConstants.BUTTON_LEFT) }
+                    ImeControlKey("R-Click") { sendButtonTap(RfbConstants.BUTTON_RIGHT) }
+                    ImeControlKey("Drag", active = dragLocked) { onToggleDragLock() }
+                    ImeControlKey("▲") { sendButtonTap(RfbConstants.BUTTON_WHEEL_UP) }
+                    ImeControlKey("▼") { sendButtonTap(RfbConstants.BUTTON_WHEEL_DOWN) }
+                    ImeControlKey("⌨") { onRequestKeyboard() }
+                    ImeControlKey("Esc") { tapKeySym(KeySymMapper.XK_ESCAPE) }
+                }
+            }
         }
 
         // Smart Automatic Control Bar: ONLY visible while the Android soft keyboard is open
@@ -159,7 +220,7 @@ fun DesktopTab(
                         label = if (touchMode == TouchInputMode.DIRECT_TAP) "Tap" else "Trackpad",
                         active = touchMode == TouchInputMode.TRACKPAD
                     ) { onToggleTouchMode() }
-                    ImeControlKey("R-Click") { sendRightClickCenter() }
+                    ImeControlKey("R-Click") { sendButtonTap(RfbConstants.BUTTON_RIGHT) }
                     ImeControlKey("✕ Hide", active = true) { hideKeyboardTrigger++ }
                 }
             }

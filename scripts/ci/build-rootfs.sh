@@ -49,8 +49,9 @@ PACKAGES=(
     desktop-file-utils
     shared-mime-info
     font-noto
-    # PocketStore & PocketLinux Settings (GTK-3 Python) + VirGL/Mesa GPU
+    # PocketStore, Download Manager, Interactive Desktop & Settings (GTK-3 Python + Cairo) + VirGL/Mesa GPU
     py3-gobject3
+    py3-cairo
     mesa-egl
     mesa-gles
     # GLX software rasterizer (fixes "couldn't get an RGB, Double-buffered visual")
@@ -125,15 +126,17 @@ if [[ " ${REQUESTED_ABIS[*]} " == *" arm64-v8a "* ]]; then
     fi
 fi
 
-# Generate crisp dark-gradient PNG wallpaper once via Python stdlib (zero external deps)
-WALLPAPER_PNG="$WORK_DIR/pocketlinux-wallpaper.png"
-python3 - "$WALLPAPER_PNG" <<'PYEOF'
+# Generate 4 crisp built-in dark-gradient PNG wallpapers once via Python stdlib (zero external deps)
+WALLPAPER_DIR="$WORK_DIR/wallpapers"
+mkdir -p "$WALLPAPER_DIR"
+python3 - "$WALLPAPER_DIR" <<'PYEOF'
 import math
+import os
 import struct
 import sys
 import zlib
 
-out_path = sys.argv[1]
+out_dir = sys.argv[1]
 W, H = 1280, 720
 
 
@@ -146,56 +149,65 @@ def png_chunk(tag: bytes, data: bytes) -> bytes:
     )
 
 
-rows = bytearray()
+THEMES = [
+    # filename, base_top, base_bot, glow1_rgb, glow2_rgb, grid
+    ("pocketlinux-wallpaper.png", (11, 17, 32), (30, 41, 59), (14, 165, 233), (99, 102, 241), True),
+    ("wallpaper-aurora.png", (10, 12, 30), (24, 18, 52), (139, 92, 246), (20, 184, 166), False),
+    ("wallpaper-emerald.png", (8, 22, 24), (15, 42, 40), (16, 185, 129), (14, 165, 233), False),
+    ("wallpaper-sunset.png", (20, 12, 24), (42, 20, 30), (245, 158, 11), (239, 68, 68), False),
+]
+
 cx1, cy1 = W * 0.72, H * 0.28
 inv_r1 = 1.0 / (520.0 * 520.0)
 cx2, cy2 = W * 0.20, H * 0.82
 inv_r2 = 1.0 / (480.0 * 480.0)
 
-for y in range(H):
-    rows.append(0)
-    ty = y / (H - 1)
-    dy1 = (y - cy1) * (y - cy1)
-    dy2 = (y - cy2) * (y - cy2)
-    grid_y = (y % 64 == 0)
+for fname, bt, bb_c, g1_c, g2_c, has_grid in THEMES:
+    rows = bytearray()
+    for y in range(H):
+        rows.append(0)
+        ty = y / (H - 1)
+        dy1 = (y - cy1) * (y - cy1)
+        dy2 = (y - cy2) * (y - cy2)
+        grid_y = has_grid and (y % 64 == 0)
 
-    br = 11.0 + 19.0 * ty
-    bg = 17.0 + 24.0 * ty
-    bb = 32.0 + 27.0 * ty
+        br = bt[0] + (bb_c[0] - bt[0]) * ty
+        bg = bt[1] + (bb_c[1] - bt[1]) * ty
+        bb = bt[2] + (bb_c[2] - bt[2]) * ty
 
-    row = bytearray(W * 3)
-    idx = 0
-    for x in range(W):
-        d1 = (x - cx1) * (x - cx1) + dy1
-        g1 = math.exp(-d1 * inv_r1) if d1 < 900000 else 0.0
-        d2 = (x - cx2) * (x - cx2) + dy2
-        g2 = math.exp(-d2 * inv_r2) if d2 < 800000 else 0.0
+        row = bytearray(W * 3)
+        idx = 0
+        for x in range(W):
+            d1 = (x - cx1) * (x - cx1) + dy1
+            g1 = math.exp(-d1 * inv_r1) if d1 < 900000 else 0.0
+            d2 = (x - cx2) * (x - cx2) + dy2
+            g2 = math.exp(-d2 * inv_r2) if d2 < 800000 else 0.0
 
-        r = br + 14.0 * g1 * 0.35 + 60.0 * g2 * 0.22
-        g = bg + 165.0 * g1 * 0.28 + 65.0 * g2 * 0.16
-        b = bb + 233.0 * g1 * 0.34 + 190.0 * g2 * 0.26
+            r = br + g1_c[0] * g1 * 0.34 + g2_c[0] * g2 * 0.26
+            g = bg + g1_c[1] * g1 * 0.30 + g2_c[1] * g2 * 0.22
+            b = bb + g1_c[2] * g1 * 0.34 + g2_c[2] * g2 * 0.28
 
-        if grid_y or (x % 64 == 0):
-            r += 5.0
-            g += 8.0
-            b += 12.0
+            if grid_y or (has_grid and x % 64 == 0):
+                r += 5.0
+                g += 8.0
+                b += 12.0
 
-        row[idx] = 255 if r > 255 else int(r)
-        row[idx + 1] = 255 if g > 255 else int(g)
-        row[idx + 2] = 255 if b > 255 else int(b)
-        idx += 3
-    rows.extend(row)
+            row[idx] = 255 if r > 255 else int(r)
+            row[idx + 1] = 255 if g > 255 else int(g)
+            row[idx + 2] = 255 if b > 255 else int(b)
+            idx += 3
+        rows.extend(row)
 
-ihdr = struct.pack(">IIBBBBB", W, H, 8, 2, 0, 0, 0)
-idat = zlib.compress(bytes(rows), level=6)
-png_bytes = (
-    b"\x89PNG\r\n\x1a\n"
-    + png_chunk(b"IHDR", ihdr)
-    + png_chunk(b"IDAT", idat)
-    + png_chunk(b"IEND", b"")
-)
-with open(out_path, "wb") as f:
-    f.write(png_bytes)
+    ihdr = struct.pack(">IIBBBBB", W, H, 8, 2, 0, 0, 0)
+    idat = zlib.compress(bytes(rows), level=6)
+    png_bytes = (
+        b"\x89PNG\r\n\x1a\n"
+        + png_chunk(b"IHDR", ihdr)
+        + png_chunk(b"IDAT", idat)
+        + png_chunk(b"IEND", b"")
+    )
+    with open(os.path.join(out_dir, fname), "wb") as f:
+        f.write(png_bytes)
 PYEOF
 
 # Fetch host (x86_64) apk-tools-static from Alpine v3.20 main
@@ -220,7 +232,10 @@ install_desktop_and_home() {
         "$rootfs/mnt/sdcard" \
         "$rootfs/mnt/phone" \
         "$rootfs/usr/share/backgrounds" \
+        "$rootfs/usr/share/applications" \
+        "$rootfs/etc/xdg/menus" \
         "$rootfs/root/Desktop" \
+        "$rootfs/root/Applications" \
         "$rootfs/root/Documents" \
         "$rootfs/root/Downloads" \
         "$rootfs/root/Projects" \
@@ -233,8 +248,8 @@ install_desktop_and_home() {
         "$rootfs/etc/profile.d" \
         "$rootfs/root/.config/pocketlinux"
 
-    sudo cp "$WALLPAPER_PNG" "$rootfs/usr/share/backgrounds/pocketlinux-wallpaper.png"
-    sudo chmod 0644 "$rootfs/usr/share/backgrounds/pocketlinux-wallpaper.png"
+    sudo cp "$WALLPAPER_DIR"/*.png "$rootfs/usr/share/backgrounds/"
+    sudo chmod 0644 "$rootfs/usr/share/backgrounds/"*.png
 
     sudo ln -sfn /mnt/sdcard "$rootfs/root/SharedStorage"
     sudo ln -sfn /mnt/phone "$rootfs/root/PhoneStorage"
@@ -254,11 +269,14 @@ gtk-font-name=DejaVu Sans 10
 gtk-cursor-theme-name=Adwaita
 gtk-toolbar-style=GTK_TOOLBAR_ICONS
 gtk-enable-animations=0
+gtk-double-click-distance=16
+gtk-double-click-time=500
 EOF
 
     cat <<'EOF' | sudo tee "$rootfs/root/.config/gtk-3.0/bookmarks" >/dev/null
 file:///root Home
 file:///root/Desktop Desktop
+file:///root/Applications Applications
 file:///root/Documents Documents
 file:///root/Downloads Downloads
 file:///root/Projects Projects
@@ -266,6 +284,56 @@ file:///mnt/sdcard Shared Storage
 file:///mnt/phone Phone Storage
 file:/// Root Filesystem
 EOF
+
+    cat <<'EOF' | sudo tee "$rootfs/etc/xdg/menus/lxde-applications.menu" >/dev/null
+<!DOCTYPE Menu PUBLIC "-//freedesktop//DTD Menu 1.0//EN"
+ "http://www.freedesktop.org/standards/menu-spec/1.0/menu.dtd">
+<Menu>
+  <Name>Applications</Name>
+  <DefaultAppDirs/>
+  <DefaultDirectoryDirs/>
+  <DefaultMergeDirs/>
+  <Menu>
+    <Name>Internet</Name>
+    <Include><Category>Network</Category><Category>WebBrowser</Category></Include>
+  </Menu>
+  <Menu>
+    <Name>Development</Name>
+    <Include><Category>Development</Category></Include>
+  </Menu>
+  <Menu>
+    <Name>Graphics</Name>
+    <Include><Category>Graphics</Category></Include>
+  </Menu>
+  <Menu>
+    <Name>Office</Name>
+    <Include><Category>Office</Category></Include>
+  </Menu>
+  <Menu>
+    <Name>Multimedia</Name>
+    <Include><Category>AudioVideo</Category><Category>Audio</Category><Category>Video</Category></Include>
+  </Menu>
+  <Menu>
+    <Name>Games</Name>
+    <Include><Category>Game</Category></Include>
+  </Menu>
+  <Menu>
+    <Name>Accessories</Name>
+    <Include><Category>Utility</Category></Include>
+  </Menu>
+  <Menu>
+    <Name>System</Name>
+    <Include><Category>System</Category><Category>Settings</Category></Include>
+  </Menu>
+  <Menu>
+    <Name>Other</Name>
+    <OnlyUnallocated/>
+    <Include><All/></Include>
+  </Menu>
+</Menu>
+EOF
+    sudo ln -sfn lxde-applications.menu "$rootfs/etc/xdg/menus/applications.menu"
+    sudo chmod 0644 "$rootfs/etc/xdg/menus/lxde-applications.menu"
 
     cat <<'EOF' | sudo tee "$rootfs/root/.config/libfm/libfm.conf" >/dev/null
 [config]
@@ -355,18 +423,29 @@ EOF
 [Desktop Entry]
 Type=Application
 Name=App Store
-Comment=Install Linux Apps with Auto-Dependencies
+Comment=Install Linux Apps with Parallel Background Downloads
 Exec=/usr/local/bin/pocketlinux-store.py
 Icon=system-software-install
 Terminal=false
 Categories=System;PackageManager;
 EOF
 
+    cat <<'EOF' | sudo tee "$rootfs/root/Desktop/downloads.desktop" >/dev/null
+[Desktop Entry]
+Type=Application
+Name=Downloads
+Comment=Parallel Background Download Manager & Live Logs
+Exec=/usr/local/bin/pocketlinux-downloads.py
+Icon=folder-download
+Terminal=false
+Categories=Network;System;
+EOF
+
     cat <<'EOF' | sudo tee "$rootfs/root/Desktop/settings.desktop" >/dev/null
 [Desktop Entry]
 Type=Application
-Name=Settings & GPU
-Comment=GPU Acceleration, Display & System Repair
+Name=Settings
+Comment=Windows-Style Personalization, GPU, Network & Privacy
 Exec=/usr/local/bin/pocketlinux-settings.py
 Icon=preferences-system
 Terminal=false
@@ -428,36 +507,156 @@ Terminal=false
 Categories=System;Monitor;
 EOF
 
+    # Also expose core PocketLinux apps in /usr/share/applications for PCManFM Applications view
+    sudo cp "$rootfs/root/Desktop/store.desktop" "$rootfs/usr/share/applications/pocketlinux-store.desktop"
+    sudo cp "$rootfs/root/Desktop/downloads.desktop" "$rootfs/usr/share/applications/pocketlinux-downloads.desktop"
+    sudo cp "$rootfs/root/Desktop/settings.desktop" "$rootfs/usr/share/applications/pocketlinux-settings.desktop"
+
+    # Default JWM dynamic include fragments & Desktop preferences
+    cat <<'EOF' | sudo tee "$rootfs/root/.jwmrc-apps" >/dev/null
+<?xml version="1.0"?>
+<JWM>
+    <Program label="Install Apps via PocketStore..." icon="system-software-install">pocketlinux-store.py</Program>
+</JWM>
+EOF
+
+    cat <<'EOF' | sudo tee "$rootfs/root/.jwmrc-theme" >/dev/null
+<?xml version="1.0"?>
+<JWM>
+    <Tray x="0" y="-1" height="42" autohide="off" halign="fixed" valign="bottom">
+        <TrayButton label=" Apps " icon="start-here">root:1</TrayButton>
+        <Spacer width="4"/>
+        <TrayButton label=" Store " icon="system-software-install">exec:pocketlinux-store.py</TrayButton>
+        <TrayButton label=" DL " icon="folder-download">exec:pocketlinux-downloads.py</TrayButton>
+        <TrayButton label=" Settings " icon="preferences-system">exec:pocketlinux-settings.py</TrayButton>
+        <TrayButton label=" Term " icon="utilities-terminal">exec:xterm -fa "DejaVu Sans Mono" -fs 12 -bg "#0F172A" -fg "#E2E8F0"</TrayButton>
+        <TrayButton label=" Files " icon="system-file-manager">exec:pcmanfm /root</TrayButton>
+        <Spacer width="6"/>
+        <Pager labeled="true"/>
+        <TaskList maxwidth="220"/>
+        <Dock/>
+        <Clock format="%H:%M"/>
+    </Tray>
+    <WindowStyle>
+        <Font>DejaVu Sans-10:bold</Font>
+        <Width>4</Width>
+        <Height>28</Height>
+        <Corner>6</Corner>
+        <Foreground>#CBD5E1</Foreground>
+        <Background>#1E293B</Background>
+        <Outline>#334155</Outline>
+        <Opacity>1.0</Opacity>
+        <Active>
+            <Foreground>#FFFFFF</Foreground>
+            <Background>#0EA5E9</Background>
+            <Outline>#38BDF8</Outline>
+            <Opacity>1.0</Opacity>
+        </Active>
+    </WindowStyle>
+    <TrayStyle group="true" list="all">
+        <Font>DejaVu Sans-10:bold</Font>
+        <Background>#0F172A</Background>
+        <Foreground>#F1F5F9</Foreground>
+        <Outline>#1E293B</Outline>
+        <Active>
+            <Foreground>#FFFFFF</Foreground>
+            <Background>#0284C7</Background>
+        </Active>
+    </TrayStyle>
+    <TaskListStyle>
+        <Font>DejaVu Sans-10</Font>
+        <Active>
+            <Foreground>#FFFFFF</Foreground>
+            <Background>#0EA5E9</Background>
+        </Active>
+        <Foreground>#CBD5E1</Foreground>
+        <Background>#1E293B</Background>
+    </TaskListStyle>
+    <PagerStyle>
+        <Outline>#334155</Outline>
+        <Foreground>#38BDF8</Foreground>
+        <Background>#0F172A</Background>
+        <Text>#E2E8F0</Text>
+        <Active>
+            <Foreground>#0EA5E9</Foreground>
+            <Background>#1E293B</Background>
+        </Active>
+    </PagerStyle>
+    <MenuStyle>
+        <Font>DejaVu Sans-11</Font>
+        <Foreground>#F1F5F9</Foreground>
+        <Background>#0F172A</Background>
+        <Outline>#334155</Outline>
+        <Active>
+            <Foreground>#FFFFFF</Foreground>
+            <Background>#0EA5E9</Background>
+        </Active>
+    </MenuStyle>
+    <ClockStyle>
+        <Font>DejaVu Sans-11:bold</Font>
+        <Foreground>#38BDF8</Foreground>
+        <Background>#0F172A</Background>
+    </ClockStyle>
+    <Desktops width="2" height="1">
+        <Background type="solid">#0F172A</Background>
+    </Desktops>
+    <DoubleClickSpeed>500</DoubleClickSpeed>
+    <DoubleClickDelta>16</DoubleClickDelta>
+    <SnapMode distance="12">border</SnapMode>
+    <MoveMode>opaque</MoveMode>
+    <ResizeMode>outline</ResizeMode>
+</JWM>
+EOF
+
+    cat <<'EOF' | sudo tee "$rootfs/root/.config/pocketlinux/desktop.json" >/dev/null
+{
+  "show_icons": true,
+  "icon_size": 48,
+  "single_click": true,
+  "snap_grid": true,
+  "auto_arrange": false,
+  "wallpaper": "/usr/share/backgrounds/pocketlinux-wallpaper.png",
+  "accent_color": "#0EA5E9",
+  "accent_dark": "#0284C7",
+  "accent_light": "#38BDF8",
+  "taskbar_position": "bottom",
+  "taskbar_height": 42,
+  "taskbar_autohide": false,
+  "clock_format": "%H:%M",
+  "workspaces": 2,
+  "move_mode": "opaque",
+  "resize_mode": "outline",
+  "snap_distance": 12,
+  "double_click_delta": 16,
+  "dpi_scale": 96,
+  "auto_desktop_shortcuts": true
+}
+EOF
+
     cat <<'EOF' | sudo tee "$rootfs/root/Documents/Welcome-to-PocketLinux.txt" >/dev/null
 ============================================================
-                 Welcome to PocketLinux!
+                 Welcome to PocketLinux 2.1!
 ============================================================
 
 You are running a full Alpine Linux desktop inside Android.
 
 Quick Folder Guide
 ------------------
-- /root/Desktop         Desktop app shortcuts
+- /root/Desktop         Movable Desktop app shortcuts (drag anywhere!)
+- /root/Applications    All installed Linux applications
 - /root/Documents       Notes and guides (including this file)
-- /root/Downloads       Downloaded files
+- /root/Downloads       Downloaded files (from Download Manager)
 - /root/Projects        Sample Python & ELF test scripts
 - /root/SharedStorage   Linked to Android app shared storage (/mnt/sdcard)
-- /root/PhoneStorage    Linked to phone storage (/mnt/phone)
+- /root/PhoneStorage    Linked to phone storage (/mnt/phone; hideable via Privacy Mode)
 
-Running Linux & ELF Binaries
-----------------------------
-PocketLinux includes gcompat (glibc compatibility layer), file,
-and patchelf so both musl and standard glibc Linux ELF binaries
-can be inspected and executed:
-
-  linux-health.sh                 Run full system & ELF self-check
-  run-elf.sh --info /bin/busybox  Inspect ELF headers & libraries
-  run-elf.sh ./my-linux-binary    Execute a Linux ELF binary
-
-Installing More Packages
-------------------------
-  apk update
-  apk add git vim gcc musl-dev    # Install extra dev tools anytime
+New in PocketLinux 2.1
+----------------------
+- Standalone Download Manager with parallel multi-stream acceleration & live logs
+- Background installs that continue even after closing PocketStore
+- Movable Windows-style Desktop icons with auto-placement for installed apps
+- Windows-11-inspired Settings with live themes, wallpapers, taskbar & Privacy Mode
+- Android Native Network Bridge so Firefox, Chromium & Luakit resolve DNS cleanly
 EOF
 
     cat <<'EOF' | sudo tee "$rootfs/root/Projects/hello.py" >/dev/null
@@ -503,6 +702,10 @@ EOF
     sudo cp "$OVERLAY_DIR/usr/local/bin/run-elf.sh" "$rootfs/usr/local/bin/run-elf.sh"
     sudo cp "$OVERLAY_DIR/usr/local/bin/fix-dns.sh" "$rootfs/usr/local/bin/fix-dns.sh"
     sudo cp "$OVERLAY_DIR/usr/local/bin/pocketlinux-store.py" "$rootfs/usr/local/bin/pocketlinux-store.py"
+    sudo cp "$OVERLAY_DIR/usr/local/bin/pocketlinux-downloads.py" "$rootfs/usr/local/bin/pocketlinux-downloads.py"
+    sudo cp "$OVERLAY_DIR/usr/local/bin/pocketlinux-pkgd.py" "$rootfs/usr/local/bin/pocketlinux-pkgd.py"
+    sudo cp "$OVERLAY_DIR/usr/local/bin/pocketlinux-desktop.py" "$rootfs/usr/local/bin/pocketlinux-desktop.py"
+    sudo cp "$OVERLAY_DIR/usr/local/bin/pocketlinux-sync-apps.py" "$rootfs/usr/local/bin/pocketlinux-sync-apps.py"
     sudo cp "$OVERLAY_DIR/usr/local/bin/pocketlinux-settings.py" "$rootfs/usr/local/bin/pocketlinux-settings.py"
     sudo cp "$OVERLAY_DIR/usr/local/sbin/apk" "$rootfs/usr/local/sbin/apk"
     sudo cp "$OVERLAY_DIR/etc/profile.d/pocketlinux-gpu.sh" "$rootfs/etc/profile.d/pocketlinux-gpu.sh"
@@ -510,6 +713,8 @@ EOF
     sudo chown -R 0:0 "$rootfs/root" "$rootfs/usr/local" "$rootfs/usr/share/backgrounds"
     sudo chmod 0644 \
         "$rootfs/root/.jwmrc" \
+        "$rootfs/root/.jwmrc-apps" \
+        "$rootfs/root/.jwmrc-theme" \
         "$rootfs/root/.bashrc" \
         "$rootfs/etc/profile.d/pocketlinux-gpu.sh" \
         "$rootfs/root/.Xresources" \
@@ -519,9 +724,14 @@ EOF
         "$rootfs/root/.config/libfm/libfm.conf" \
         "$rootfs/root/.config/pcmanfm/default/pcmanfm.conf" \
         "$rootfs/root/.config/pcmanfm/default/desktop-items-0.conf" \
+        "$rootfs/root/.config/pocketlinux/desktop.json" \
+        "$rootfs/usr/share/applications/pocketlinux-store.desktop" \
+        "$rootfs/usr/share/applications/pocketlinux-downloads.desktop" \
+        "$rootfs/usr/share/applications/pocketlinux-settings.desktop" \
         "$rootfs/root/Documents/Welcome-to-PocketLinux.txt"
     sudo chmod 0755 \
         "$rootfs/root/Desktop/store.desktop" \
+        "$rootfs/root/Desktop/downloads.desktop" \
         "$rootfs/root/Desktop/settings.desktop" \
         "$rootfs/root/Desktop/terminal.desktop" \
         "$rootfs/root/Desktop/files.desktop" \
@@ -535,6 +745,10 @@ EOF
         "$rootfs/usr/local/bin/linux-health.sh" \
         "$rootfs/usr/local/bin/run-elf.sh" \
         "$rootfs/usr/local/bin/pocketlinux-store.py" \
+        "$rootfs/usr/local/bin/pocketlinux-downloads.py" \
+        "$rootfs/usr/local/bin/pocketlinux-pkgd.py" \
+        "$rootfs/usr/local/bin/pocketlinux-desktop.py" \
+        "$rootfs/usr/local/bin/pocketlinux-sync-apps.py" \
         "$rootfs/usr/local/bin/pocketlinux-settings.py" \
         "$rootfs/usr/local/bin/fix-dns.sh" \
         "$rootfs/usr/local/sbin/apk"
@@ -663,7 +877,16 @@ PYEOF
         glib-compile-schemas /usr/share/glib-2.0/schemas 2>/dev/null || true
         update-desktop-database /usr/share/applications 2>/dev/null || true
         update-mime-database /usr/share/mime 2>/dev/null || true
-        python3 -m py_compile /usr/local/bin/pocketlinux-store.py /usr/local/bin/pocketlinux-settings.py || true
+        python3 -m py_compile \
+            /usr/local/bin/pocketlinux-store.py \
+            /usr/local/bin/pocketlinux-downloads.py \
+            /usr/local/bin/pocketlinux-pkgd.py \
+            /usr/local/bin/pocketlinux-desktop.py \
+            /usr/local/bin/pocketlinux-sync-apps.py \
+            /usr/local/bin/pocketlinux-settings.py
+        python3 -c "import cairo, gi; gi.require_version(\"Gtk\", \"3.0\"); gi.require_version(\"PangoCairo\", \"1.0\"); from gi.repository import Gtk, Gdk, GdkPixbuf, Pango, PangoCairo"
+        HOME=/root /usr/local/bin/pocketlinux-sync-apps.py
+        HOME=/root jwm -p
     '
 
     unmount_rootfs "$rootfs"

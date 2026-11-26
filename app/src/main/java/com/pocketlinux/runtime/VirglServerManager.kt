@@ -32,6 +32,7 @@ class VirglServerManager(
 
     val serverExecutable: File = File(nativeLibraryDir, binaryName)
     val socketFile: File = File(ipcDir, socketName)
+    val logFile: File = File(ipcDir, "virgl_server.log")
 
     private val lock = Any()
     private val keepAlive = AtomicBoolean(false)
@@ -86,6 +87,8 @@ class VirglServerManager(
             ipcDir.setWritable(true, false)
             ipcDir.setExecutable(true, false)
             if (socketFile.exists()) socketFile.delete()
+            logFile.writeText("[VirGL] Starting ${serverExecutable.name} -> ${socketFile.absolutePath}\n")
+            logFile.setReadable(true, false)
         }
 
         val pb = ProcessBuilder(
@@ -108,7 +111,10 @@ class VirglServerManager(
             }
         }
 
-        val proc = runCatching { pb.start() }.getOrElse { return null }
+        val proc = runCatching { pb.start() }.getOrElse {
+            appendLog("[VirGL] Failed to spawn server: ${it.message}\n")
+            return null
+        }
         serverProcess = proc
 
         monitorThread = Thread(
@@ -144,6 +150,19 @@ class VirglServerManager(
         }
     }
 
+    private fun appendLog(chunk: String) {
+        if (chunk.isEmpty()) return
+        logTail.append(chunk)
+        runCatching {
+            if (logFile.length() > 65_536L) {
+                logFile.writeText(logTail.snapshot())
+            } else {
+                logFile.appendText(chunk)
+            }
+            logFile.setReadable(true, false)
+        }
+    }
+
     private fun superviseProcess(proc: Process) {
         var rapidFailures = 0
         var currentProc: Process? = proc
@@ -151,7 +170,8 @@ class VirglServerManager(
             val startMs = System.currentTimeMillis()
             try {
                 drainStreamUtf8(currentProc.inputStream)
-                currentProc.waitFor()
+                val code = currentProc.waitFor()
+                appendLog("\n[VirGL supervisor] Process exited with code=$code\n")
             } catch (_: InterruptedException) {
                 Thread.currentThread().interrupt()
                 break
@@ -165,7 +185,7 @@ class VirglServerManager(
             val ranMs = System.currentTimeMillis() - startMs
             rapidFailures = if (ranMs < 1_000L) rapidFailures + 1 else 0
             if (rapidFailures >= MAX_RAPID_FAILURES) {
-                logTail.append("\n[VirGL supervisor] Disabled auto-restart after $rapidFailures rapid exits.\n")
+                appendLog("\n[VirGL supervisor] Disabled auto-restart after $rapidFailures rapid exits.\n")
                 break
             }
 
@@ -204,7 +224,7 @@ class VirglServerManager(
                 while (true) {
                     val read = reader.read(buffer)
                     if (read < 0) break
-                    if (read > 0) logTail.append(String(buffer, 0, read))
+                    if (read > 0) appendLog(String(buffer, 0, read))
                 }
             }
         } catch (_: Exception) {

@@ -1,5 +1,5 @@
-# PocketLinux GPU, hardware topology & desktop performance environment profile
-# Sourced by /etc/profile and /usr/local/bin/start-desktop.sh (POSIX sh compatible)
+# PocketLinux GPU, hardware topology, browser & network environment profile
+# Sourced by /etc/profile, /root/.bashrc, and /usr/local/bin/start-desktop.sh (POSIX sh compatible)
 
 if [ -r /etc/pocketlinux-hardware.env ]; then
     # shellcheck disable=SC1091
@@ -8,13 +8,32 @@ fi
 
 export GDK_BACKEND="${GDK_BACKEND:-x11}"
 export GDK_RENDERING="${GDK_RENDERING:-image}"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/runtime-root}"
 export NO_AT_BRIDGE=1
 export GTK_A11Y=none
 export QT_ACCESSIBILITY=0
 export GIO_USE_VFS="${GIO_USE_VFS:-local}"
 export GSETTINGS_BACKEND="${GSETTINGS_BACKEND:-memory}"
 export MESA_SHADER_CACHE_DIR="${MESA_SHADER_CACHE_DIR:-/tmp/mesa_shader_cache}"
-export MESA_GLSL_CACHE_MAX_SIZE="${MESA_GLSL_CACHE_MAX_SIZE:-128M}"
+export MESA_SHADER_CACHE_MAX_SIZE="${MESA_SHADER_CACHE_MAX_SIZE:-128M}"
+
+# PRoot-safe browser flags so Firefox ESR, Luakit (WebKitGTK), and Chromium run reliably
+export MOZ_DISABLE_CONTENT_SANDBOX=1
+export MOZ_DISABLE_RDD_SANDBOX=1
+export MOZ_DISABLE_GMP_SANDBOX=1
+export MOZ_DISABLE_SOCKET_PROCESS_SANDBOX=1
+export MOZ_USE_XINPUT2=1
+export WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1
+export WEBKIT_DISABLE_DMABUF_RENDERER=1
+export WEBKIT_DISABLE_COMPOSITING_MODE=1
+
+# Load Android Native Network/DNS Bridge proxy if enabled or auto-activated when UDP 53 is blocked
+_pocketlinux_net_env="/root/.config/pocketlinux/network.env"
+if [ -r "$_pocketlinux_net_env" ]; then
+    # shellcheck disable=SC1090
+    . "$_pocketlinux_net_env"
+fi
+unset _pocketlinux_net_env
 
 # Resolve live VirGL UNIX socket from directory bind-mount (/tmp/.virgl_ipc/.virgl_test) or /tmp/.virgl_test
 if [ -S /tmp/.virgl_ipc/.virgl_test ]; then
@@ -43,8 +62,6 @@ else
     if [ -S "$VTEST_SOCKET_NAME" ]; then
         export GALLIUM_DRIVER="virpipe"
         export MESA_NO_ERROR="1"
-        export MESA_GL_VERSION_OVERRIDE="${MESA_GL_VERSION_OVERRIDE:-4.0}"
-        export MESA_GLSL_VERSION_OVERRIDE="${MESA_GLSL_VERSION_OVERRIDE:-400}"
     else
         export GALLIUM_DRIVER="llvmpipe"
         export MESA_NO_ERROR="1"

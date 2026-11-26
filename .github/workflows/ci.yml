@@ -44,7 +44,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: app/src/main/jniLibs
-          key: ${{ runner.os }}-proot-virgl-v3-${{ hashFiles('scripts/ci/build-proot.sh', 'scripts/ci/build-virgl.sh') }}
+          key: ${{ runner.os }}-proot-virgl-v4-${{ hashFiles('scripts/ci/build-proot.sh', 'scripts/ci/build-virgl.sh') }}
 
       - name: Build PRoot & unbundled loader (arm64-v8a & x86_64)
         run: bash scripts/ci/build-proot.sh --skip-existing
@@ -58,7 +58,7 @@ jobs:
           path: |
             app/src/arm64/assets/rootfs-arm64-v8a.tar.gz
             app/src/x86_64/assets/rootfs-x86_64.tar.gz
-          key: ${{ runner.os }}-rootfs-v3.20-v3-${{ hashFiles('scripts/ci/build-rootfs.sh', 'scripts/ci/rootfs-overlay/**') }}
+          key: ${{ runner.os }}-rootfs-v3.20-v4-${{ hashFiles('scripts/ci/build-rootfs.sh', 'scripts/ci/rootfs-overlay/**') }}
 
       - name: Build Alpine v3.20 rootfs tarballs (aarch64 & x86_64)
         run: bash scripts/ci/build-rootfs.sh --skip-existing
@@ -92,6 +92,7 @@ jobs:
 
             sudo chroot "$stage" /bin/sh -c '
               set -eu
+              export HOME=/root
               export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
               /bin/bash --version | head -n 1
               test -x /usr/local/sbin/apk
@@ -100,15 +101,24 @@ jobs:
               apk --version
               LD_PRELOAD=/usr/local/lib/libnoflock.so /sbin/apk --version
               python3 --version
-              python3 -c "import gi; gi.require_version(\"Gtk\", \"3.0\"); from gi.repository import Gtk; print(\"GTK3_PY_OK\")"
+              python3 -c "import cairo, gi; gi.require_version(\"Gtk\", \"3.0\"); gi.require_version(\"PangoCairo\", \"1.0\"); from gi.repository import Gtk, Gdk, GdkPixbuf, Pango, PangoCairo; print(\"GTK3_CAIRO_PY_OK\")"
               file --version | head -n 1
               nano --version | head -n 1
               test -d /root/Desktop
+              test -d /root/Applications
               test -d /dev/shm
               test -f /root/.config/gtk-3.0/bookmarks
+              test -f /etc/xdg/menus/lxde-applications.menu
               test -x /usr/local/bin/linux-health.sh
+              test -x /usr/local/bin/fix-dns.sh
               test -x /usr/local/bin/pocketlinux-store.py
+              test -x /usr/local/bin/pocketlinux-downloads.py
+              test -x /usr/local/bin/pocketlinux-pkgd.py
+              test -x /usr/local/bin/pocketlinux-desktop.py
+              test -x /usr/local/bin/pocketlinux-sync-apps.py
               test -x /usr/local/bin/pocketlinux-settings.py
+              /usr/local/bin/pocketlinux-sync-apps.py
+              jwm -p
               /usr/local/bin/linux-health.sh --smoke
               xvnc_out="$(Xvnc -help 2>&1 || true)"
               printf "%s\n" "$xvnc_out" | grep -qi "Xvnc"

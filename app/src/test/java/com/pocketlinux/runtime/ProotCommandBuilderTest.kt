@@ -91,4 +91,35 @@ class ProotCommandBuilderTest {
         val sysinfoText = builder.buildSysInfo(textMode = true)
         assertEquals(listOf("/usr/local/bin/sysinfo.sh", "--text"), sysinfoText.argv.takeLast(2))
     }
+
+    @Test
+    fun privacyHidePhoneMountsEmptyDirectoryAndExposesNetBridgeEnv() {
+        val tmpRoot = java.nio.file.Files.createTempDirectory("proot-privacy-test").toFile()
+        try {
+            val fDir = File(tmpRoot, "files").apply { mkdirs() }
+            val cDir = File(tmpRoot, "cache").apply { mkdirs() }
+            val nDir = File(tmpRoot, "native").apply { mkdirs() }
+            val localBuilder = ProotCommandBuilder(fDir, cDir, nDir)
+            localBuilder.emptyPhoneDir.mkdirs()
+
+            assertFalse(localBuilder.isPhoneStorageHidden())
+            localBuilder.hidePhoneStorageFlag.writeText("1")
+            assertTrue(localBuilder.isPhoneStorageHidden())
+
+            val cmd = localBuilder.buildShellExec("ls /mnt/phone")
+            assertTrue(cmd.argv.contains("${localBuilder.emptyPhoneDir.absolutePath}:/mnt/phone"))
+            assertEquals("http://127.0.0.1:${AndroidNetworkBridge.DEFAULT_PORT}", cmd.env["POCKETLINUX_NET_BRIDGE"])
+            assertEquals("/tmp/runtime-root", cmd.env["XDG_RUNTIME_DIR"])
+
+            // Guest-side privacy flag also enables Privacy Mode
+            localBuilder.hidePhoneStorageFlag.delete()
+            assertFalse(localBuilder.isPhoneStorageHidden())
+            val guestFlag = File(localBuilder.rootfsDir, "root/.config/pocketlinux/privacy_hide_phone")
+            guestFlag.parentFile?.mkdirs()
+            guestFlag.writeText("1")
+            assertTrue(localBuilder.isPhoneStorageHidden())
+        } finally {
+            tmpRoot.deleteRecursively()
+        }
+    }
 }
