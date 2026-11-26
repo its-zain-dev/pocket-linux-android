@@ -50,6 +50,7 @@ Xvnc "$DISPLAY" \
     -rfbport "$RFB_PORT" \
     -localhost \
     -SecurityTypes None \
+    +extension GLX \
     -ac \
     -AlwaysShared \
     -ZlibLevel 1 \

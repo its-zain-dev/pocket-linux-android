@@ -22,4 +22,9 @@ else
     fi
 fi
 
+# Xvnc has no real GPU: use Mesa's software GLX path unless VirGL is active
+if [ "${GALLIUM_DRIVER:-}" != "virpipe" ]; then
+    export LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE:-1}"
+fi
+
 unset _pocketlinux_gpu_env

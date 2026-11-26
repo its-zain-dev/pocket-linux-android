@@ -53,6 +53,10 @@ PACKAGES=(
     py3-gobject3
     mesa-egl
     mesa-gles
+    # GLX software rasterizer (fixes "couldn't get an RGB, Double-buffered visual")
+    mesa-gl
+    mesa-dri-gallium
+    mesa-demos
 )
 
 SKIP_EXISTING=false
