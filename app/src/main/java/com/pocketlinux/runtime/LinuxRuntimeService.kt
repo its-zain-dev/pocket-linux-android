@@ -123,16 +123,16 @@ class LinuxRuntimeService : Service(), LinuxRuntimeController {
         engine.collectMetrics()
 
     fun readSafeAndroidMemoryKb(): Pair<Int, Int> {
+        val fastRssKb = readAndroidRssKb()
+        if (fastRssKb > 0) {
+            return fastRssKb to fastRssKb
+        }
         val pssKb = runCatching {
             val memInfo = Debug.MemoryInfo()
             Debug.getMemoryInfo(memInfo)
             memInfo.totalPss
         }.getOrDefault(0).coerceAtLeast(1)
-
-        val rssKb = readAndroidRssKb().let { rawRss ->
-            if (rawRss > 0) rawRss else pssKb
-        }
-        return pssKb to rssKb
+        return pssKb to pssKb
     }
 
     override fun onDestroy() {

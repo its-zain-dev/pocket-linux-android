@@ -46,7 +46,8 @@ class ProotCommandBuilderTest {
 
         assertEquals(File(nativeDir, "libproot-loader.so").absolutePath, cmd.env["PROOT_LOADER"])
         assertEquals(File(cacheDir, "proot_tmp").absolutePath, cmd.env["PROOT_TMP_DIR"])
-        assertEquals("1", cmd.env["PROOT_NO_SECCOMP"])
+        assertNull(cmd.env["PROOT_NO_SECCOMP"])
+        assertEquals("1", cmd.env["NO_AT_BRIDGE"])
         assertEquals("/root", cmd.env["HOME"])
         assertEquals("root", cmd.env["USER"])
         assertEquals("xterm-256color", cmd.env["TERM"])
@@ -64,7 +65,7 @@ class ProotCommandBuilderTest {
 
         val envp = cmd.toEnvpArray()
         assertTrue(envp.contains("PROOT_LOADER=${File(nativeDir, "libproot-loader.so").absolutePath}"))
-        assertTrue(envp.contains("PROOT_NO_SECCOMP=1"))
+        assertTrue(envp.contains("NO_AT_BRIDGE=1"))
     }
 
     @Test

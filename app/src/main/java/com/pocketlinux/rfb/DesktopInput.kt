@@ -249,6 +249,7 @@ class TouchInputController(
     private val doubleTapMs: Long = 300L,
     private val scrollStepPx: Float = 24f,
     private val trackpadSensitivity: Float = 1.0f,
+    private val enableAcceleration: Boolean = false,
     private val onPointerEvent: (x: Int, y: Int, buttonMask: Int) -> Unit
 ) {
     private enum class GestureState {
@@ -275,6 +276,9 @@ class TouchInputController(
     var cursorY: Int = -1
         private set
 
+    val isDragging: Boolean
+        get() = state == GestureState.DRAGGING
+
     private var state = GestureState.IDLE
     private val activePointers = LinkedHashMap<Int, Pair<Float, Float>>()
 
@@ -283,6 +287,7 @@ class TouchInputController(
     private var downY = 0f
     private var lastX = 0f
     private var lastY = 0f
+    private var lastMoveTimeMs = 0L
     private var downDesktopX = 0
     private var downDesktopY = 0
     private var downTimeMs = 0L
@@ -322,6 +327,7 @@ class TouchInputController(
         downY = y
         lastX = x
         lastY = y
+        lastMoveTimeMs = nowMs
         downTimeMs = nowMs
         longPressTriggered = false
         trackpadMoved = false
@@ -469,10 +475,21 @@ class TouchInputController(
 
                     val vp = computeViewport(viewWidth, viewHeight, desktopWidth, desktopHeight)
                     val scale = vp?.scale ?: 1f
-                    accumX += ((x - lastX) / scale) * trackpadSensitivity
-                    accumY += ((y - lastY) / scale) * trackpadSensitivity
+                    val rawDx = x - lastX
+                    val rawDy = y - lastY
+                    val accel = if (enableAcceleration) {
+                        val dtMs = (nowMs - lastMoveTimeMs).coerceIn(4L, 100L).toFloat()
+                        val speedPxPerMs = hypot(rawDx, rawDy) / dtMs
+                        (1.0f + (speedPxPerMs - 0.35f).coerceAtLeast(0f) * 0.55f).coerceIn(1.0f, 2.25f)
+                    } else {
+                        1.0f
+                    }
+                    val gain = trackpadSensitivity * accel
+                    accumX += (rawDx / scale) * gain
+                    accumY += (rawDy / scale) * gain
                     lastX = x
                     lastY = y
+                    lastMoveTimeMs = nowMs
 
                     val dx = accumX.toInt()
                     val dy = accumY.toInt()

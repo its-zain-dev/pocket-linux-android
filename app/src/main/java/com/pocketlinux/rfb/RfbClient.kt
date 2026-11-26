@@ -42,10 +42,18 @@ class RfbClient(
 
     val frameGeneration = AtomicLong(0L)
 
+    private class CoalescedMoveSlot(
+        var x: Int,
+        var y: Int,
+        val mask: Int,
+        var consumed: Boolean = false
+    )
+
     private val frameListeners = CopyOnWriteArraySet<() -> Unit>()
     private val lifecycleLock = Any()
     private val writeLock = Any()
     private val renderScratchLock = Any()
+    private val pointerCoalesceLock = Any()
 
     private var connectionGeneration: Long = 0L
     private var activeSocket: Socket? = null
@@ -53,6 +61,8 @@ class RfbClient(
     private var writerExecutor: ExecutorService? = null
     private var readerThread: Thread? = null
     private var renderScratch: IntArray = IntArray(0)
+    private var activeMoveSlot: CoalescedMoveSlot? = null
+    private var lastQueuedPointerMask: Int = -1
 
     @Volatile
     private var supportsExtendedDesktopSize: Boolean = false
@@ -89,6 +99,11 @@ class RfbClient(
         val gen: Long
         val newWriter: ExecutorService
         val reader: Thread
+
+        synchronized(pointerCoalesceLock) {
+            activeMoveSlot = null
+            lastQueuedPointerMask = -1
+        }
 
         synchronized(lifecycleLock) {
             gen = ++connectionGeneration
@@ -152,6 +167,11 @@ class RfbClient(
         val oldWriter: ExecutorService?
         val oldReader: Thread?
 
+        synchronized(pointerCoalesceLock) {
+            activeMoveSlot = null
+            lastQueuedPointerMask = -1
+        }
+
         synchronized(lifecycleLock) {
             connectionGeneration++
             oldSocket = activeSocket
@@ -187,8 +207,43 @@ class RfbClient(
         val clampedX = x.coerceIn(0, w - 1)
         val clampedY = y.coerceIn(0, h - 1)
 
-        enqueueWrite { out ->
-            RfbProtocol.writePointerEvent(out, clampedX, clampedY, buttonMask)
+        val moveSlotToEnqueue: CoalescedMoveSlot?
+        synchronized(pointerCoalesceLock) {
+            val existing = activeMoveSlot
+            if (existing != null && !existing.consumed && existing.mask == buttonMask) {
+                existing.x = clampedX
+                existing.y = clampedY
+                return
+            }
+            if (buttonMask == lastQueuedPointerMask) {
+                val slot = CoalescedMoveSlot(clampedX, clampedY, buttonMask)
+                activeMoveSlot = slot
+                moveSlotToEnqueue = slot
+            } else {
+                activeMoveSlot = null
+                lastQueuedPointerMask = buttonMask
+                moveSlotToEnqueue = null
+            }
+        }
+
+        if (moveSlotToEnqueue != null) {
+            enqueueWrite { out ->
+                val fx: Int
+                val fy: Int
+                synchronized(pointerCoalesceLock) {
+                    moveSlotToEnqueue.consumed = true
+                    if (activeMoveSlot === moveSlotToEnqueue) {
+                        activeMoveSlot = null
+                    }
+                    fx = moveSlotToEnqueue.x
+                    fy = moveSlotToEnqueue.y
+                }
+                RfbProtocol.writePointerEvent(out, fx, fy, moveSlotToEnqueue.mask)
+            }
+        } else {
+            enqueueWrite { out ->
+                RfbProtocol.writePointerEvent(out, clampedX, clampedY, buttonMask)
+            }
         }
     }
 
@@ -271,8 +326,8 @@ class RfbClient(
     }
 
     /**
-     * Copies the latest framebuffer into [reusable] when dimensions and mutability match,
-     * avoiding per-frame allocations on the dedicated SurfaceView render thread.
+     * Copies only the dirty framebuffer region into [reusable] when dimensions and mutability
+     * match, avoiding full-screen pixel copies and full-texture GPU uploads on incremental updates.
      */
     fun renderIntoBitmap(reusable: Bitmap?): Bitmap? {
         for (attempt in 0 until 2) {
@@ -280,15 +335,14 @@ class RfbClient(
             val (w, h) = fb.dimensions()
             if (w <= 0 || h <= 0) return null
 
-            val target = if (
-                reusable != null &&
+            val canReuse = reusable != null &&
                 !reusable.isRecycled &&
                 reusable.isMutable &&
                 reusable.width == w &&
                 reusable.height == h &&
                 reusable.config == Bitmap.Config.ARGB_8888
-            ) {
-                reusable
+            val target = if (canReuse) {
+                reusable!!
             } else {
                 Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
             }
@@ -298,8 +352,24 @@ class RfbClient(
                 if (renderScratch.size < needed) {
                     renderScratch = IntArray(needed)
                 }
-                if (fb.copyPixelsInto(renderScratch, w, h)) {
-                    target.setPixels(renderScratch, 0, w, 0, 0, w, h)
+                val region = fb.consumeDirtyRegionInto(
+                    dest = renderScratch,
+                    expectedWidth = w,
+                    expectedHeight = h,
+                    forceFull = !canReuse
+                )
+                if (region != null) {
+                    if (region.width > 0 && region.height > 0) {
+                        target.setPixels(
+                            renderScratch,
+                            0,
+                            region.width,
+                            region.x,
+                            region.y,
+                            region.width,
+                            region.height
+                        )
+                    }
                     return target
                 }
             }
@@ -333,11 +403,15 @@ class RfbClient(
             socket = s
 
             s.tcpNoDelay = true
+            runCatching {
+                s.receiveBufferSize = 524_288
+                s.sendBufferSize = 65_536
+            }
             s.soTimeout = handshakeTimeoutMs
             s.connect(InetSocketAddress(host, port), connectTimeoutMs)
 
-            val input = DataInputStream(BufferedInputStream(s.getInputStream(), 65_536))
-            val output = DataOutputStream(BufferedOutputStream(s.getOutputStream(), 16_384))
+            val input = DataInputStream(BufferedInputStream(s.getInputStream(), 262_144))
+            val output = DataOutputStream(BufferedOutputStream(s.getOutputStream(), 32_768))
 
             val serverInit = RfbProtocol.performHandshake(input, output)
             s.soTimeout = 0
@@ -389,25 +463,29 @@ class RfbClient(
                         }
                     }
                     if (!active) return
-                    for (cb in frameListeners) {
-                        cb()
-                    }
+
+                    // Pipeline the next FramebufferUpdateRequest immediately so Xvnc starts
+                    // preparing the next frame in parallel while SurfaceView renders this frame.
                     val (w, h) = sessionFramebuffer.dimensions()
                     if (w > 0 && h > 0) {
-                        synchronized(lifecycleLock) {
-                            if (connectionGeneration != gen) return
+                        val stillCurrent = synchronized(lifecycleLock) { connectionGeneration == gen }
+                        if (stillCurrent) {
+                            synchronized(writeLock) {
+                                RfbProtocol.writeFramebufferUpdateRequest(
+                                    output = output,
+                                    incremental = !resized,
+                                    x = 0,
+                                    y = 0,
+                                    width = w,
+                                    height = h,
+                                    flush = true
+                                )
+                            }
                         }
-                        synchronized(writeLock) {
-                            RfbProtocol.writeFramebufferUpdateRequest(
-                                output = output,
-                                incremental = !resized,
-                                x = 0,
-                                y = 0,
-                                width = w,
-                                height = h,
-                                flush = true
-                            )
-                        }
+                    }
+
+                    for (cb in frameListeners) {
+                        cb()
                     }
                 }
 

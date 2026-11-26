@@ -89,7 +89,6 @@ class ProotCommandBuilder(
         val env = linkedMapOf(
             "PROOT_LOADER" to prootLoader.absolutePath,
             "PROOT_TMP_DIR" to prootTmpDir.absolutePath,
-            "PROOT_NO_SECCOMP" to "1",
             "HOME" to "/root",
             "USER" to "root",
             "XDG_CONFIG_HOME" to "/root/.config",
@@ -99,6 +98,28 @@ class ProotCommandBuilder(
             "TMPDIR" to "/tmp",
             "PATH" to "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         )
+        // PRoot's seccomp-BPF filter lets it skip ptrace stops for syscalls it does not
+        // need to translate, which is several times faster than full syscall tracing.
+        // Devices that kill proot with SIGSYS can opt out by creating files/proot_no_seccomp.
+        if (File(rootfsDir.parentFile, "proot_no_seccomp").exists()) {
+            env["PROOT_NO_SECCOMP"] = "1"
+        }
+        // Skip the GTK/Qt accessibility bus and remote GVFS/dconf D-Bus lookups
+        // (each otherwise causes a 3-10s timeout on every GUI app launch inside PRoot).
+        env["NO_AT_BRIDGE"] = "1"
+        env["GTK_A11Y"] = "none"
+        env["QT_ACCESSIBILITY"] = "0"
+        env["GIO_USE_VFS"] = "local"
+        env["GSETTINGS_BACKEND"] = "memory"
+        env["GDK_RENDERING"] = "image"
+        env["MESA_SHADER_CACHE_DIR"] = "/tmp/mesa_shader_cache"
+        val dbusAddrFile = File(rootfsDir, "tmp/.pocketlinux_dbus_address")
+        if (dbusAddrFile.isFile) {
+            val addr = runCatching { dbusAddrFile.readText().trim() }.getOrDefault("")
+            if (addr.isNotEmpty()) {
+                env["DBUS_SESSION_BUS_ADDRESS"] = addr
+            }
+        }
         if (display != null) {
             env["DISPLAY"] = display
         }
