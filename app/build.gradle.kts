@@ -12,10 +12,19 @@ android {
         applicationId = "com.pocketlinux"
         minSdk = 26
         targetSdk = 34
-        versionCode = 5
-        versionName = "2.1.0"
+        versionCode = 6
+        versionName = "2.1.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("pocketlinux-debug.keystore")
+            storePassword = "android"
+            keyAlias = "pocketlinuxdebugkey"
+            keyPassword = "android"
+        }
     }
 
     flavorDimensions += "abi"
@@ -44,6 +53,7 @@ android {
         }
         debug {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 

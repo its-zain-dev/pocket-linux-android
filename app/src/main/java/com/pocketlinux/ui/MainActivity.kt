@@ -108,7 +108,11 @@ class MainActivity : ComponentActivity() {
         storagePermissionState.value = granted
         if (granted && !lastKnownStorageGranted) {
             lastKnownStorageGranted = true
-            LinuxRuntimeService.serviceInstance.value?.restartRuntime()
+            val svc = LinuxRuntimeService.serviceInstance.value
+            val st = svc?.state?.value
+            if (svc != null && (st is RuntimeState.Ready || st is RuntimeState.Booting || st is RuntimeState.Error)) {
+                svc.restartRuntime()
+            }
         }
     }
 
@@ -169,7 +173,11 @@ class MainActivity : ComponentActivity() {
         storagePermissionState.value = nowGranted
         if (nowGranted && !lastKnownStorageGranted) {
             lastKnownStorageGranted = true
-            LinuxRuntimeService.serviceInstance.value?.restartRuntime()
+            val svc = LinuxRuntimeService.serviceInstance.value
+            val st = svc?.state?.value
+            if (svc != null && (st is RuntimeState.Ready || st is RuntimeState.Booting || st is RuntimeState.Error)) {
+                svc.restartRuntime()
+            }
         }
     }
 

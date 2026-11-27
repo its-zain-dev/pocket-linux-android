@@ -31,7 +31,39 @@ READY_FILE="/tmp/.pocketlinux_desktop_ready"
 DBUS_ADDR_FILE="/tmp/.pocketlinux_dbus_address"
 WALLPAPER="/usr/share/backgrounds/pocketlinux-wallpaper.png"
 
-rm -f "$READY_FILE" "${READY_FILE}.tmp" "$DBUS_ADDR_FILE" /tmp/.X1-lock /tmp/.X11-unix/X1 /lib/apk/db/lock 2>/dev/null || true
+rm -f "$READY_FILE" "${READY_FILE}.tmp" "$DBUS_ADDR_FILE" /lib/apk/db/lock 2>/dev/null || true
+
+# Reap any orphaned Xvnc / JWM / Desktop / Download Daemon processes left over from a prior restart
+for p in Xvnc jwm; do
+    pkill -TERM -x "$p" 2>/dev/null || true
+done
+pkill -TERM -f "pocketlinux-desktop.py" 2>/dev/null || true
+pkill -TERM -f "pocketlinux-pkgd.py" 2>/dev/null || true
+sleep 0.15
+for p in Xvnc jwm; do
+    pkill -KILL -x "$p" 2>/dev/null || true
+done
+pkill -KILL -f "pocketlinux-desktop.py" 2>/dev/null || true
+pkill -KILL -f "pocketlinux-pkgd.py" 2>/dev/null || true
+
+# Wait up to 2.5s for TCP RFB_PORT to become completely free (prevents "Address in use (98)")
+python3 - "$RFB_PORT" <<'PYEOF' 2>/dev/null || true
+import socket, sys, time
+port = int(sys.argv[1])
+deadline = time.monotonic() + 2.5
+while time.monotonic() < deadline:
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind(("127.0.0.1", port))
+        s.close()
+        break
+    except OSError:
+        s.close()
+        time.sleep(0.08)
+PYEOF
+
+rm -f /tmp/.X1-lock /tmp/.X11-unix/X1 2>/dev/null || true
 if [ -d /dev/shm ]; then
     chmod 1777 /dev/shm 2>/dev/null || true
     ln -sfn /dev/shm /run/shm 2>/dev/null || true
@@ -233,9 +265,9 @@ else
     DISPLAY="$DISPLAY" xsetroot -solid "#0F172A" -cursor_name left_ptr 2>/dev/null || true
 fi
 
-# Start persistent background Download & Package Manager daemon
+# Start persistent background Download & Package Manager daemon inside session tree
 if [ -x /usr/local/bin/pocketlinux-pkgd.py ]; then
-    /usr/local/bin/pocketlinux-pkgd.py >/tmp/pkgd.log 2>&1 &
+    /usr/local/bin/pocketlinux-pkgd.py --foreground >/tmp/pkgd.log 2>&1 &
     PKGD_PID=$!
 fi
 
