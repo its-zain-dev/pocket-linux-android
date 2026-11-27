@@ -72,9 +72,11 @@ jobs:
             local use_qemu="$2"
             local stage="$RUNNER_TEMP/smoke-$use_qemu-$$"
             cleanup_stage() {
-              if mountpoint -q "$stage/proc" 2>/dev/null; then
-                sudo umount -l "$stage/proc" || true
-              fi
+              for mp in "$stage/dev" "$stage/proc"; do
+                if mountpoint -q "$mp" 2>/dev/null; then
+                  sudo umount -l "$mp" || true
+                fi
+              done
               sudo rm -rf "$stage" || true
             }
             trap cleanup_stage RETURN
@@ -89,6 +91,7 @@ jobs:
               fi
             fi
             sudo mount -t proc proc "$stage/proc"
+            sudo mount --bind /dev "$stage/dev"
 
             sudo chroot "$stage" /bin/sh -c '
               set -eu

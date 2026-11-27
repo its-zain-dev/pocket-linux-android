@@ -2,6 +2,17 @@
 
 All notable changes to **PocketLinux for Android** are documented in this file.
 
+## [2.1.1] - 2026-11-26
+
+### Fixed
+- **Fixed `Xvnc` `Address in use (98)` / `_XSERVTransSocketUNIXCreateListener` Boot Error on Restart & First-Boot Storage Permission**:
+  - Added Android UID orphan process sweeper (`killOrphanedGuestProcesses`) + VNC port-release wait (`waitUntilVncPortClosed`) in `LinuxRuntimeService` and `LinuxRuntimeEngine`, plus serialized `engine.restartRuntime()`.
+  - Updated `start-desktop.sh` to reap any stale `Xvnc` / `jwm` / `pocketlinux-desktop.py` / `pocketlinux-pkgd.py` processes, wait until TCP port `5901` is completely unbound before starting `Xvnc`, and run `pocketlinux-pkgd.py --foreground` inside the session tree.
+  - Prevented first-boot double-restart when legacy Android storage permission is granted during initial rootfs extraction in `MainActivity.kt`, and bumped `RootfsManager` schema to `v4`.
+- **Fixed "App not installed" (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`) on Future Updates**:
+  - Added deterministic `app/pocketlinux-debug.keystore` signing config in `app/build.gradle.kts` so all future releases from `v2.1.1` onward share the exact same SHA-256 certificate and update seamlessly in-place without uninstalling.
+- **Fixed CI Rootfs Smoke Test**: Bind-mounted `/dev` inside `ci.yml`'s `smoke_check_rootfs` chroot so `/dev/null` is present for Python `subprocess.DEVNULL`.
+
 ## [2.1.0] - 2026-11-26
 
 ### Added

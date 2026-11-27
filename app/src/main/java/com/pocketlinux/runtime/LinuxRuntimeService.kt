@@ -72,7 +72,8 @@ class LinuxRuntimeService : Service(), LinuxRuntimeController {
             readAndroidMemoryKb = {
                 readSafeAndroidMemoryKb()
             },
-            onNotificationUpdate = { text -> updateNotification(text) }
+            onNotificationUpdate = { text -> updateNotification(text) },
+            onKillOrphanedGuestProcesses = { killOrphanedGuestProcesses() }
         )
         terminalSession = TerminalSessionController(this)
         _serviceInstance.value = this
@@ -133,17 +134,25 @@ class LinuxRuntimeService : Service(), LinuxRuntimeController {
     }
 
     fun restartRuntime() {
-        serviceMonitorScope.launch {
-            runCatching { stopRuntime() }
-            delay(350L)
-            runCatching { startRuntime() }
+        if (shuttingDown.get()) return
+        if (::terminalSession.isInitialized) {
+            terminalSession.closeCurrentSession()
         }
+        runCatching { rfbClient.disconnect() }
+        serviceMonitorScope.launch {
+            runCatching { networkBridge.start() }
+            if (::virglServerManager.isInitialized) {
+                runCatching { virglServerManager.start() }
+            }
+        }
+        engine.restartRuntime()
     }
 
     fun shutdownAndExit() {
         if (!shuttingDown.compareAndSet(false, true)) return
         _shutdownRequested.value = true
         runCatching { stopRuntime() }
+        runCatching { killOrphanedGuestProcesses() }
         if (::virglServerManager.isInitialized) {
             runCatching { virglServerManager.stop() }
         }
@@ -155,6 +164,37 @@ class LinuxRuntimeService : Service(), LinuxRuntimeController {
             getSystemService(NotificationManager::class.java)?.cancel(NOTIFICATION_ID)
         }
         stopSelf()
+    }
+
+    /**
+     * Reaps any orphaned PRoot / Xvnc / JWM / Desktop / Download Daemon child processes
+     * belonging to this app's UID so VNC port 5901 and X11 socket :1 are guaranteed free
+     * on restart and zero background processes remain after Exit.
+     */
+    private fun killOrphanedGuestProcesses() {
+        val myPid = android.os.Process.myPid()
+        val procDir = File("/proc")
+        val entries = runCatching { procDir.listFiles() }.getOrNull() ?: return
+        val targets = listOf(
+            "Xvnc",
+            "jwm",
+            "libproot.so",
+            "start-desktop.sh",
+            "pocketlinux-desktop.py",
+            "pocketlinux-pkgd.py",
+            "dbus-daemon"
+        )
+        for (entry in entries) {
+            val pid = entry.name.toIntOrNull() ?: continue
+            if (pid == myPid) continue
+            val cmdline = runCatching {
+                File(entry, "cmdline").readBytes().toString(Charsets.UTF_8).replace('\u0000', ' ')
+            }.getOrDefault("")
+            if (cmdline.isBlank()) continue
+            if (targets.any { cmdline.contains(it) }) {
+                runCatching { Os.kill(pid, OsConstants.SIGKILL) }
+            }
+        }
     }
 
     fun isPhoneStorageHidden(): Boolean {

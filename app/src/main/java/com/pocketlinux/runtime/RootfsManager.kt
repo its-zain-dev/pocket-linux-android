@@ -366,7 +366,7 @@ class RootfsManager(
 
     companion object {
         const val READY_MARKER_NAME = ".rootfs_ready_v1"
-        const val CURRENT_ROOTFS_SCHEMA_VERSION = 3
+        const val CURRENT_ROOTFS_SCHEMA_VERSION = 4
         private const val IO_BUFFER_SIZE = 65536
         private const val PROGRESS_INTERVAL = 250
         private const val MODE_DIR_WRITABLE = 493 // 0755

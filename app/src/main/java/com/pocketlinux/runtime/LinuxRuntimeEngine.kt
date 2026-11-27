@@ -91,6 +91,7 @@ internal class LinuxRuntimeEngine(
     },
     private val readAndroidMemoryKb: () -> Pair<Int, Int> = { 0 to 0 },
     private val onNotificationUpdate: (String) -> Unit = {},
+    private val onKillOrphanedGuestProcesses: (() -> Unit)? = null,
     private val bootTimeoutMs: Long = DEFAULT_BOOT_TIMEOUT_MS,
     private val bootPollIntervalMs: Long = DEFAULT_BOOT_POLL_INTERVAL_MS,
     private val guiStartupCheckMs: Long = DEFAULT_GUI_STARTUP_CHECK_MS,
@@ -190,6 +191,12 @@ internal class LinuxRuntimeEngine(
             val effectiveRootfsMs = if (rootfsReadyMs > 0L) rootfsReadyMs else bootElapsedMs
 
             deleteDesktopReadyMarkers()
+            val orphanReaper = onKillOrphanedGuestProcesses
+            if (orphanReaper != null && isTcpPortOpen(vncHost, vncPort, 80)) {
+                runCatching { orphanReaper() }
+                waitUntilVncPortClosed(1_500L)
+                deleteDesktopReadyMarkers()
+            }
 
             _state.value = RuntimeState.Booting
             onNotificationUpdate("Booting X11 desktop...")
@@ -314,6 +321,11 @@ internal class LinuxRuntimeEngine(
                 }
             }
         }
+    }
+
+    fun restartRuntime() {
+        stopRuntime()
+        startRuntime()
     }
 
     override suspend fun execCommand(command: String, timeoutMs: Long): CommandResult =
@@ -584,6 +596,26 @@ internal class LinuxRuntimeEngine(
             destroyProcessCleanly(proc)
         }
         desktopProcess = null
+        val orphanReaper = onKillOrphanedGuestProcesses
+        if (orphanReaper != null) {
+            runCatching { orphanReaper() }
+            waitUntilVncPortClosed(1_500L)
+        }
+    }
+
+    private fun waitUntilVncPortClosed(timeoutMs: Long) {
+        val deadline = System.nanoTime() + timeoutMs * 1_000_000L
+        while (System.nanoTime() < deadline) {
+            if (!isTcpPortOpen(vncHost, vncPort, 80)) {
+                return
+            }
+            try {
+                Thread.sleep(50L)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return
+            }
+        }
     }
 
     private fun deleteDesktopReadyMarkers() {
